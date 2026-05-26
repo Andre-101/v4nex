@@ -11,6 +11,8 @@ Este escenario prepara los artefactos que infra necesita para la Ronda 2 de sinc
 - Caddy productivo apuntando a frontend interno en puerto `80`.
 - Scripts seguros para build/check/tag/push/check GHCR de app images.
 
+Ver `docs/24-app-ghcr-publish-check.md` para la publicacion y validacion GHCR de backend/frontend.
+
 No se hizo deploy, no se ejecuto `docker compose up`, no se emitio TLS, no se ejecuto ACME, no se llamo Cloudflare API, no se modifico DNS publico y no se construyo nada en la VPS.
 
 ## Decisiones tomadas

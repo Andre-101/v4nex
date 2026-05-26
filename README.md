@@ -57,3 +57,7 @@ cd apps/backend && python -m venv .venv && source .venv/bin/activate && pip inst
 ## Nota
 
 Este escenario **no** implementa registro/login real, bridges, validaciones avanzadas, CI/CD ni despliegue.
+
+## Readiness productivo
+
+- [Escenario 23 - App images, compose productivo propuesto y SYNC Ronda 2](docs/23-app-images-compose-sync.md)
