@@ -1,0 +1,22 @@
+{
+  email {$CADDY_ACME_EMAIL}
+  admin 0.0.0.0:2019
+}
+
+{$CADDY_DOMAIN}, *.{$CADDY_DOMAIN} {
+  tls {
+    dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+  }
+
+  encode zstd gzip
+
+  @api path /_v4nex/* /health
+
+  handle @api {
+    reverse_proxy backend:{$BACKEND_PORT}
+  }
+
+  handle {
+    reverse_proxy frontend:80
+  }
+}

@@ -94,7 +94,7 @@ services:
     volumes:
       - caddy_data:/data
       - caddy_config:/config
-      - ./infra/caddy/Caddyfile.prod.example:/etc/caddy/Caddyfile:ro
+      - ./infra/caddy/Caddyfile.prod:/etc/caddy/Caddyfile:ro
     depends_on:
       - backend
       - frontend
