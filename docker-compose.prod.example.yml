@@ -1,0 +1,88 @@
+# Example only. This is a reviewable production draft, not a deploy-ready compose file.
+services:
+  db:
+    image: postgres:16
+    container_name: v4nex-prod-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./apps/backend
+    container_name: v4nex-prod-backend
+    restart: unless-stopped
+    environment:
+      APP_ENV: ${APP_ENV:?APP_ENV is required}
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:?PUBLIC_DOMAIN is required}
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-60}
+      CADDY_ADMIN_URL: ${CADDY_ADMIN_URL:?CADDY_ADMIN_URL is required}
+      CADDY_ADMIN_TIMEOUT_SECONDS: ${CADDY_ADMIN_TIMEOUT_SECONDS:-3}
+      MAX_BRIDGES_PER_USER: ${MAX_BRIDGES_PER_USER:-5}
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:?RATE_LIMIT_ENABLED is required}
+      RATE_LIMIT_WINDOW_SECONDS: ${RATE_LIMIT_WINDOW_SECONDS:-60}
+      RATE_LIMIT_MAX_REQUESTS: ${RATE_LIMIT_MAX_REQUESTS:-30}
+      RATE_LIMIT_STRICT_MAX_REQUESTS: ${RATE_LIMIT_STRICT_MAX_REQUESTS:-10}
+    expose:
+      - "8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)\"",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./apps/frontend
+    container_name: v4nex-prod-frontend
+    restart: unless-stopped
+    expose:
+      - "5173"
+    depends_on:
+      - backend
+
+  caddy:
+    image: caddy:2
+    container_name: v4nex-prod-caddy
+    restart: unless-stopped
+    environment:
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:?PUBLIC_DOMAIN is required}
+      ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL is required}
+      DNS_PROVIDER: ${DNS_PROVIDER:?DNS_PROVIDER is required}
+      DNS_PROVIDER_API_TOKEN: ${DNS_PROVIDER_API_TOKEN:?DNS_PROVIDER_API_TOKEN is required}
+    ports:
+      - "80:80"
+      - "443:443"
+    expose:
+      - "2019"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      - backend
+      - frontend
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:
