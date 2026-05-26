@@ -18,7 +18,7 @@ services:
 
   backend:
     build:
-      context: ./backend
+      context: ./apps/backend
     container_name: v4nex-backend
     environment:
       ENV: ${ENV:-development}
@@ -31,7 +31,7 @@ services:
 
   frontend:
     build:
-      context: ./frontend
+      context: ./apps/frontend
     container_name: v4nex-frontend
     ports:
       - "${FRONTEND_PORT:-5173}:5173"
@@ -44,7 +44,7 @@ services:
     ports:
       - "${CADDY_PORT:-8080}:8080"
     volumes:
-      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
     depends_on:
       - frontend
       - backend

@@ -37,6 +37,7 @@ docker compose up --build
 
 - Frontend: `http://localhost:5173`
 - Backend (directo): `http://localhost:8000/health`
+- Backend por Caddy (ruta interna): `http://localhost:8080/_v4nex/health`
 - Caddy (proxy dev): `http://localhost:8080`
 - Postgres: `localhost:5432`
 
@@ -47,10 +48,10 @@ docker compose up --build
 bash scripts/check-no-secrets.sh
 
 # Frontend local sin Docker
-cd frontend && npm install && npm run dev
+cd apps/frontend && npm install && npm run dev
 
 # Backend local sin Docker
-cd backend && python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt && uvicorn app.main:app --reload
+cd apps/backend && python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt && uvicorn app.main:app --reload
 ```
 
 ## Nota

@@ -1,5 +1,5 @@
 :8080 {
-  @api path /api/* /health
+  @api path /_v4nex/* /health
 
   handle @api {
     reverse_proxy backend:8000
