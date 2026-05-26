@@ -5,8 +5,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.errors import AppError, ErrorCode
+from app.core.rate_limit import check_rate_limit
 from app.core.security import create_access_token, hash_password, verify_password
 from app.db.session import get_db
+from app.domain.user_role import UserRole
 from app.models.user import User
 from app.schemas.auth import LoginRequest, RegisterRequest, TokenResponse, UserResponse
 
@@ -39,6 +41,7 @@ def validate_password(password: str) -> str:
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> UserResponse:
     email = validate_email(payload.email)
+    check_rate_limit("auth.register", email)
     validate_password(payload.password)
 
     existing_user = db.scalar(select(User).where(User.email == email))
@@ -48,7 +51,11 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> UserRes
             message="Email already exists.",
         )
 
-    user = User(email=email, password_hash=hash_password(payload.password))
+    user = User(
+        email=email,
+        password_hash=hash_password(payload.password),
+        role=UserRole.USER.value,
+    )
     db.add(user)
     db.commit()
     db.refresh(user)
@@ -59,6 +66,7 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> UserRes
 @router.post("/login", response_model=TokenResponse)
 def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse:
     email = payload.email.strip().lower()
+    check_rate_limit("auth.login", email)
     user = db.scalar(select(User).where(User.email == email))
     if user is None or not verify_password(payload.password, user.password_hash):
         raise AppError(

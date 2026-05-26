@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from app.core.errors import AppError, ErrorCode
 from app.core.security import decode_access_token
 from app.db.session import get_db
+from app.domain.user_role import UserRole
 from app.models.user import User
 
 
@@ -30,3 +31,12 @@ def get_current_user(
         )
 
     return user
+
+
+def require_admin_user(current_user: User = Depends(get_current_user)) -> User:
+    if current_user.role != UserRole.ADMIN.value:
+        raise AppError(
+            code=ErrorCode.FORBIDDEN,
+            message="Admin privileges are required.",
+        )
+    return current_user
