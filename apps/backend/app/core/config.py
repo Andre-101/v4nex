@@ -24,6 +24,10 @@ class Settings(BaseModel):
 def get_settings() -> Settings:
     return Settings(
         app_env=os.getenv("APP_ENV", os.getenv("ENV", Settings.model_fields["app_env"].default)),
+        public_domain=os.getenv(
+            "PUBLIC_DOMAIN",
+            Settings.model_fields["public_domain"].default,
+        ),
         database_url=os.getenv("DATABASE_URL", Settings.model_fields["database_url"].default),
         jwt_secret_key=os.getenv("JWT_SECRET_KEY", Settings.model_fields["jwt_secret_key"].default),
         jwt_algorithm=os.getenv("JWT_ALGORITHM", Settings.model_fields["jwt_algorithm"].default),
