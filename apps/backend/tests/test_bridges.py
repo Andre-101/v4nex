@@ -532,13 +532,232 @@ def test_activate_fail_returns_rollback_details(
     assert details["rollback_ok"] is False
 
 
-def test_disable_endpoint_does_not_exist(client: TestClient) -> None:
+def test_disable_without_token_fails_401(client: TestClient) -> None:
+    response = client.post("/_v4nex/bridges/some-id/disable")
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "UNAUTHORIZED"
+
+
+def test_disable_other_users_bridge_returns_not_found(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    first_token = register_and_login(client, "first@example.com")
+    second_token = register_and_login(client, "second@example.com")
+    bridge_id = create_bridge(client, first_token, subdomain="first").json()["id"]
+    set_bridge_status(bridge_id, BridgeStatus.ACTIVE)
+    monkeypatch.setattr(
+        "app.api.routes.bridges.disable_bridge_routes",
+        lambda routes: CaddyActivationResult(True, "CADDY_OK", "ok", False, None),
+    )
+
+    response = client.post(
+        f"/_v4nex/bridges/{bridge_id}/disable",
+        headers=auth_headers(second_token),
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "BRIDGE_NOT_FOUND"
+
+
+def test_disable_draft_bridge_returns_invalid_state_transition(
+    client: TestClient,
+    monkeypatch,
+) -> None:
     token = register_and_login(client, "user@example.com")
     bridge_id = create_bridge(client, token).json()["id"]
+    monkeypatch.setattr(
+        "app.api.routes.bridges.disable_bridge_routes",
+        lambda routes: CaddyActivationResult(True, "CADDY_OK", "ok", False, None),
+    )
 
     response = client.post(
         f"/_v4nex/bridges/{bridge_id}/disable",
         headers=auth_headers(token),
     )
 
-    assert response.status_code == 404
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "INVALID_STATE_TRANSITION"
+
+
+def test_disable_ready_bridge_returns_invalid_state_transition(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    token = register_and_login(client, "user@example.com")
+    bridge_id = create_bridge(client, token).json()["id"]
+    set_bridge_status(bridge_id, BridgeStatus.READY)
+    monkeypatch.setattr(
+        "app.api.routes.bridges.disable_bridge_routes",
+        lambda routes: CaddyActivationResult(True, "CADDY_OK", "ok", False, None),
+    )
+
+    response = client.post(
+        f"/_v4nex/bridges/{bridge_id}/disable",
+        headers=auth_headers(token),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "INVALID_STATE_TRANSITION"
+
+
+def test_disable_active_bridge_with_caddy_ok_becomes_disabled(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    token = register_and_login(client, "user@example.com")
+    bridge_id = create_bridge(client, token).json()["id"]
+    set_bridge_status(bridge_id, BridgeStatus.ACTIVE)
+    monkeypatch.setattr(
+        "app.api.routes.bridges.disable_bridge_routes",
+        lambda routes: CaddyActivationResult(True, "CADDY_OK", "ok", False, None),
+    )
+
+    response = client.post(
+        f"/_v4nex/bridges/{bridge_id}/disable",
+        headers=auth_headers(token),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "DISABLED"
+
+
+def test_disable_active_bridge_with_caddy_fail_becomes_error(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    token = register_and_login(client, "user@example.com")
+    bridge_id = create_bridge(client, token).json()["id"]
+    set_bridge_status(bridge_id, BridgeStatus.ACTIVE)
+    monkeypatch.setattr(
+        "app.api.routes.bridges.disable_bridge_routes",
+        lambda routes: CaddyActivationResult(False, "CADDY_CONFIG_REJECTED", "rejected", True, True),
+    )
+
+    response = client.post(
+        f"/_v4nex/bridges/{bridge_id}/disable",
+        headers=auth_headers(token),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "CADDY_DISABLE_FAILED"
+
+    detail = client.get(f"/_v4nex/bridges/{bridge_id}", headers=auth_headers(token))
+    assert detail.json()["status"] == "ERROR"
+
+
+def test_disable_ok_updates_disabled_at(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    token = register_and_login(client, "user@example.com")
+    bridge_id = create_bridge(client, token).json()["id"]
+    set_bridge_status(bridge_id, BridgeStatus.ACTIVE)
+    monkeypatch.setattr(
+        "app.api.routes.bridges.disable_bridge_routes",
+        lambda routes: CaddyActivationResult(True, "CADDY_OK", "ok", False, None),
+    )
+
+    response = client.post(
+        f"/_v4nex/bridges/{bridge_id}/disable",
+        headers=auth_headers(token),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["disabled_at"] is not None
+
+
+def test_disable_ok_creates_started_and_passed_events(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    token = register_and_login(client, "user@example.com")
+    bridge_id = create_bridge(client, token).json()["id"]
+    set_bridge_status(bridge_id, BridgeStatus.ACTIVE)
+    monkeypatch.setattr(
+        "app.api.routes.bridges.disable_bridge_routes",
+        lambda routes: CaddyActivationResult(True, "CADDY_OK", "ok", False, None),
+    )
+
+    assert (
+        client.post(f"/_v4nex/bridges/{bridge_id}/disable", headers=auth_headers(token)).status_code
+        == 200
+    )
+    events = client.get(f"/_v4nex/bridges/{bridge_id}/events", headers=auth_headers(token))
+    event_types = [event["event_type"] for event in events.json()]
+
+    assert "CADDY_DISABLE_STARTED" in event_types
+    assert "CADDY_DISABLE_PASSED" in event_types
+
+
+def test_disable_fail_creates_started_and_failed_events(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    token = register_and_login(client, "user@example.com")
+    bridge_id = create_bridge(client, token).json()["id"]
+    set_bridge_status(bridge_id, BridgeStatus.ACTIVE)
+    monkeypatch.setattr(
+        "app.api.routes.bridges.disable_bridge_routes",
+        lambda routes: CaddyActivationResult(False, "CADDY_CONFIG_REJECTED", "rejected", True, True),
+    )
+
+    assert (
+        client.post(f"/_v4nex/bridges/{bridge_id}/disable", headers=auth_headers(token)).status_code
+        == 409
+    )
+    events = client.get(f"/_v4nex/bridges/{bridge_id}/events", headers=auth_headers(token))
+    event_types = [event["event_type"] for event in events.json()]
+
+    assert "CADDY_DISABLE_STARTED" in event_types
+    assert "CADDY_DISABLE_FAILED" in event_types
+
+
+def test_disable_fail_returns_rollback_details(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    token = register_and_login(client, "user@example.com")
+    bridge_id = create_bridge(client, token).json()["id"]
+    set_bridge_status(bridge_id, BridgeStatus.ACTIVE)
+    monkeypatch.setattr(
+        "app.api.routes.bridges.disable_bridge_routes",
+        lambda routes: CaddyActivationResult(False, "CADDY_CONFIG_REJECTED", "rejected", True, False),
+    )
+
+    response = client.post(
+        f"/_v4nex/bridges/{bridge_id}/disable",
+        headers=auth_headers(token),
+    )
+
+    details = response.json()["error"]["details"]
+    assert details["error_code"] == "CADDY_CONFIG_REJECTED"
+    assert details["rollback_attempted"] is True
+    assert details["rollback_ok"] is False
+
+
+def test_disable_routes_exclude_disabled_bridge_and_keep_other_active(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    captured_routes = []
+    token = register_and_login(client, "user@example.com")
+    first_id = create_bridge(client, token, subdomain="first").json()["id"]
+    second_id = create_bridge(client, token, subdomain="second").json()["id"]
+    set_bridge_status(first_id, BridgeStatus.ACTIVE)
+    set_bridge_status(second_id, BridgeStatus.ACTIVE)
+
+    def fake_disable(routes):
+        captured_routes.extend(routes)
+        return CaddyActivationResult(True, "CADDY_OK", "ok", False, None)
+
+    monkeypatch.setattr("app.api.routes.bridges.disable_bridge_routes", fake_disable)
+
+    response = client.post(
+        f"/_v4nex/bridges/{first_id}/disable",
+        headers=auth_headers(token),
+    )
+
+    assert response.status_code == 200
+    assert [route.subdomain for route in captured_routes] == ["second"]

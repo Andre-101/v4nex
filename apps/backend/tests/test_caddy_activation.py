@@ -3,6 +3,7 @@ from app.services.caddy_activation import (
     CADDY_OK,
     CaddyActivationResult,
     activate_bridge_routes,
+    disable_bridge_routes,
 )
 from app.services.caddy_client import CaddyClientError
 from app.services.caddy_config import CaddyBridgeRoute, build_caddy_config
@@ -55,6 +56,18 @@ def test_caddy_activation_rolls_back_when_load_fails() -> None:
     assert client.load_calls[-1] == {"previous": True}
 
 
+def test_caddy_disable_rolls_back_when_load_fails() -> None:
+    client = FakeCaddyClient(fail_load=True)
+
+    result = disable_bridge_routes([route()], client=client)
+
+    assert result.ok is False
+    assert result.error_code == CADDY_CONFIG_REJECTED
+    assert result.rollback_attempted is True
+    assert result.rollback_ok is True
+    assert client.load_calls[-1] == {"previous": True}
+
+
 def test_caddy_config_renderer_rejects_malicious_subdomain() -> None:
     malicious_route = CaddyBridgeRoute(
         subdomain="demo\nreverse_proxy evil:80",
@@ -69,3 +82,9 @@ def test_caddy_config_renderer_rejects_malicious_subdomain() -> None:
         assert exc.__class__.__name__ == "AppError"
     else:
         raise AssertionError("malicious subdomain was accepted")
+
+
+def test_caddy_config_preserves_admin_api() -> None:
+    config = build_caddy_config([route()])
+
+    assert config["admin"]["listen"] == "0.0.0.0:2019"
