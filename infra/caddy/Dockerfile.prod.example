@@ -1,10 +1,16 @@
 # Example only. This builds a custom Caddy image with Cloudflare DNS support.
 # Do not put tokens or secrets in this image.
-FROM caddy:2-builder AS builder
+FROM caddy:2.11.3-builder AS builder
 
 RUN xcaddy build \
     --with github.com/caddy-dns/cloudflare
 
-FROM caddy:2
+FROM caddy:2.11.3
+
+LABEL org.opencontainers.image.title="v4nex Caddy Cloudflare"
+LABEL org.opencontainers.image.description="Custom Caddy image with Cloudflare DNS provider module for future DNS-01 wildcard TLS."
+LABEL org.opencontainers.image.source="https://github.com/andre-101/v4nex"
+LABEL org.opencontainers.image.vendor="v4nex"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
 
 COPY --from=builder /usr/bin/caddy /usr/bin/caddy
