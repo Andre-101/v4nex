@@ -9,6 +9,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.api.routes.auth import router as auth_router
 from app.api.routes.bridges import router as bridges_router
 from app.api.routes.health import router as health_router
+from app.core.config import settings
 from app.core.errors import AppError, ErrorCode, error_response
 from app.db.base import Base
 from app.db.session import engine
@@ -17,7 +18,8 @@ from app import models  # noqa: F401
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
-    Base.metadata.create_all(bind=engine)
+    if settings.app_env == "test" and settings.database_url.startswith("sqlite"):
+        Base.metadata.create_all(bind=engine)
     yield
 
 

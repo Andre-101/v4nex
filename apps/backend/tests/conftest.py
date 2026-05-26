@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["JWT_SECRET_KEY"] = "test-only-secret"
+os.environ["APP_ENV"] = "test"
 
 from app.db.base import Base  # noqa: E402
 from app.db.session import engine  # noqa: E402
