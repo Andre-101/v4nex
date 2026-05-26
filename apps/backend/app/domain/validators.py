@@ -1,6 +1,7 @@
 import ipaddress
 import re
 
+from app.core.config import settings
 from app.core.errors import AppError, ErrorCode
 
 
@@ -29,7 +30,7 @@ RESERVED_SUBDOMAINS: frozenset[str] = frozenset(
 
 SUBDOMAIN_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,38}[a-z0-9])$")
 DOCUMENTATION_IPV6_NETWORK = ipaddress.ip_network("2001:db8::/32")
-MVP_TARGET_PORT = 80
+DEFAULT_ALLOWED_TARGET_PORTS = frozenset({80, 8080})
 
 
 def validate_subdomain(subdomain: str) -> str:
@@ -87,11 +88,30 @@ def validate_ipv6(target_ipv6: str) -> str:
 
 
 def validate_port(target_port: int) -> int:
-    if target_port != MVP_TARGET_PORT:
+    allowed_ports = frozenset(settings.allowed_target_ports) or DEFAULT_ALLOWED_TARGET_PORTS
+    details = {
+        "target_port": target_port,
+        "allowed_ports": sorted(allowed_ports),
+    }
+
+    if target_port < 1 or target_port > 65535:
         raise AppError(
             code=ErrorCode.INVALID_PORT,
-            message="Only port 80 is supported for the MVP.",
-            details={"target_port": target_port},
+            message=(
+                "Target port is not allowed. "
+                f"Allowed ports: {', '.join(str(port) for port in sorted(allowed_ports))}."
+            ),
+            details=details,
+        )
+
+    if target_port not in allowed_ports:
+        raise AppError(
+            code=ErrorCode.INVALID_PORT,
+            message=(
+                "Target port is not allowed. "
+                f"Allowed ports: {', '.join(str(port) for port in sorted(allowed_ports))}."
+            ),
+            details=details,
         )
 
     return target_port

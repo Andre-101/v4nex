@@ -51,8 +51,41 @@ def test_port_80_passes() -> None:
     assert validate_port(80) == 80
 
 
-def test_port_443_fails_for_initial_mvp() -> None:
+def test_port_8080_passes() -> None:
+    assert validate_port(8080) == 8080
+
+
+def test_port_22_fails() -> None:
     with pytest.raises(AppError) as exc_info:
-        validate_port(443)
+        validate_port(22)
+
+    assert exc_info.value.code == ErrorCode.INVALID_PORT
+    assert exc_info.value.details == {"target_port": 22, "allowed_ports": [80, 8080]}
+
+
+def test_port_2019_fails() -> None:
+    with pytest.raises(AppError) as exc_info:
+        validate_port(2019)
+
+    assert exc_info.value.code == ErrorCode.INVALID_PORT
+
+
+def test_port_5432_fails() -> None:
+    with pytest.raises(AppError) as exc_info:
+        validate_port(5432)
+
+    assert exc_info.value.code == ErrorCode.INVALID_PORT
+
+
+def test_port_65536_fails() -> None:
+    with pytest.raises(AppError) as exc_info:
+        validate_port(65536)
+
+    assert exc_info.value.code == ErrorCode.INVALID_PORT
+
+
+def test_port_0_fails() -> None:
+    with pytest.raises(AppError) as exc_info:
+        validate_port(0)
 
     assert exc_info.value.code == ErrorCode.INVALID_PORT

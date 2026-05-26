@@ -73,6 +73,24 @@ def test_create_bridge_with_valid_token_returns_draft(client: TestClient) -> Non
     assert response.json()["subdomain"] == "demo"
 
 
+def test_create_bridge_with_port_8080_returns_draft(client: TestClient) -> None:
+    token = register_and_login(client, "user@example.com")
+
+    response = client.post(
+        "/_v4nex/bridges",
+        headers=auth_headers(token),
+        json={
+            "subdomain": "demo",
+            "target_ipv6": "2606:4700:4700::1111",
+            "target_port": 8080,
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["status"] == "DRAFT"
+    assert response.json()["target_port"] == 8080
+
+
 def test_create_bridge_builds_public_url(client: TestClient) -> None:
     token = register_and_login(client, "user@example.com")
 
@@ -104,7 +122,7 @@ def test_create_bridge_with_invalid_ipv6_fails(client: TestClient) -> None:
     assert response.json()["error"]["code"] == "INVALID_IPV6"
 
 
-def test_create_bridge_with_port_443_fails(client: TestClient) -> None:
+def test_create_bridge_with_port_22_fails(client: TestClient) -> None:
     token = register_and_login(client, "user@example.com")
 
     response = client.post(
@@ -113,12 +131,16 @@ def test_create_bridge_with_port_443_fails(client: TestClient) -> None:
         json={
             "subdomain": "demo",
             "target_ipv6": "2606:4700:4700::1111",
-            "target_port": 443,
+            "target_port": 22,
         },
     )
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "INVALID_PORT"
+    assert response.json()["error"]["details"] == {
+        "target_port": 22,
+        "allowed_ports": [80, 8080],
+    }
 
 
 def test_create_bridge_with_duplicate_subdomain_fails(client: TestClient) -> None:
@@ -247,6 +269,10 @@ def test_validate_own_draft_bridge_tcp_fail_changes_to_error(
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "TCP_VALIDATION_FAILED"
+    assert response.json()["error"]["message"] == (
+        "TCP validation failed. v4nex could not reach the IPv6 service on the configured port."
+    )
+    assert response.json()["error"]["details"]["target_port"] == 80
 
     detail = client.get(f"/_v4nex/bridges/{bridge_id}", headers=auth_headers(token))
     assert detail.json()["status"] == "ERROR"
