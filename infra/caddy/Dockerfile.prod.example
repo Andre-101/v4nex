@@ -2,10 +2,53 @@
 # Do not put tokens or secrets in this image.
 FROM caddy:2.11.3-builder AS builder
 
-RUN xcaddy build \
-    --with github.com/caddy-dns/cloudflare
+WORKDIR /src
 
-FROM caddy:2.11.3
+RUN printf '%s\n' \
+    'package main' \
+    '' \
+    'import (' \
+    '	caddycmd "github.com/caddyserver/caddy/v2/cmd"' \
+    '	_ "github.com/caddyserver/caddy/v2/modules/standard"' \
+    '	_ "github.com/caddy-dns/cloudflare"' \
+    ')' \
+    '' \
+    'func main() {' \
+    '	caddycmd.Main()' \
+    '}' \
+    > main.go \
+    && go mod init caddy \
+    && go get github.com/caddyserver/caddy/v2@v2.11.3 \
+    && go get github.com/caddy-dns/cloudflare@v0.2.4 \
+    && go get golang.org/x/crypto@v0.52.0 \
+    && go get golang.org/x/net@v0.55.0 \
+    && go get golang.org/x/sys@v0.45.0 \
+    && go get github.com/go-jose/go-jose/v3@v3.0.5 \
+    && go mod tidy \
+    && CGO_ENABLED=0 go build -o /usr/bin/caddy-real -ldflags "-w -s" -trimpath -tags nobadger,nomysql,nopgx \
+    && printf '%s\n' \
+        'package main' \
+        '' \
+        'import (' \
+        '	"os"' \
+        '	"syscall"' \
+        ')' \
+        '' \
+        'func main() {' \
+        '	args := os.Args[1:]' \
+        '	if len(args) > 0 && args[0] == "caddy" {' \
+        '		args = args[1:]' \
+        '	}' \
+        '	execArgs := append([]string{"/usr/bin/caddy-real"}, args...)' \
+        '	if err := syscall.Exec("/usr/bin/caddy-real", execArgs, os.Environ()); err != nil {' \
+        '		panic(err)' \
+        '	}' \
+        '}' \
+        > /tmp/caddy-wrapper.go \
+    && CGO_ENABLED=0 go build -o /usr/bin/caddy -ldflags "-w -s" -trimpath /tmp/caddy-wrapper.go \
+    && mkdir -p /out/etc/caddy /out/data /out/config
+
+FROM scratch
 
 LABEL org.opencontainers.image.title="v4nex Caddy Cloudflare"
 LABEL org.opencontainers.image.description="Custom Caddy image with Cloudflare DNS provider module for future DNS-01 wildcard TLS."
@@ -14,3 +57,16 @@ LABEL org.opencontainers.image.vendor="v4nex"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 
 COPY --from=builder /usr/bin/caddy /usr/bin/caddy
+COPY --from=builder /usr/bin/caddy-real /usr/bin/caddy-real
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=builder /out/etc/caddy /etc/caddy
+COPY --from=builder /out/data /data
+COPY --from=builder /out/config /config
+
+ENV XDG_CONFIG_HOME=/config
+ENV XDG_DATA_HOME=/data
+
+EXPOSE 80 443 2019
+
+ENTRYPOINT ["/usr/bin/caddy"]
+CMD ["run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]

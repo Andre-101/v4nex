@@ -27,6 +27,8 @@ fi
 if docker scout version >/dev/null 2>&1; then
   echo "Running optional Docker Scout quickview for $CADDY_LOCAL_TAG"
   docker scout quickview "$CADDY_LOCAL_TAG"
+  echo "Running optional Docker Scout critical/high CVE view for $CADDY_LOCAL_TAG"
+  docker scout cves "$CADDY_LOCAL_TAG" --only-severity critical,high || true
   exit 0
 fi
 
