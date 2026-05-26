@@ -40,11 +40,33 @@ if [[ ! -f "$COMPOSE_FILE" ]]; then
 fi
 echo "OK docker-compose.prod.example.yml present"
 
-postgres_password_line="$(grep -E '^POSTGRES_PASSWORD=' "$ENV_FILE" | tail -n 1 || true)"
-if [[ -n "$postgres_password_line" ]]; then
-  postgres_password_value="${postgres_password_line#*=}"
-  export POSTGRES_PASSWORD="${postgres_password_value%$'\r'}"
+if grep -Eq '(^|[:/])latest($|[^A-Za-z0-9_.-])' "$COMPOSE_FILE"; then
+  echo "ERROR docker-compose.prod.example.yml must not use latest"
+  exit 1
 fi
+echo "OK compose does not use latest"
+
+for forbidden_port in 2019 5432 8000 5173; do
+  if grep -Eq "\"?${forbidden_port}:${forbidden_port}\"?" "$COMPOSE_FILE"; then
+    echo "ERROR compose must not publish ${forbidden_port}"
+    exit 1
+  fi
+  echo "OK compose does not publish ${forbidden_port}"
+done
+
+load_env_for_compose() {
+  local name="$1"
+  local line
+  line="$(grep -E "^${name}=" "$ENV_FILE" | tail -n 1 || true)"
+  if [[ -n "$line" ]]; then
+    value="${line#*=}"
+    export "$name=${value%$'\r'}"
+  fi
+}
+
+for name in APP_ENV DOMAIN CADDY_DOMAIN IMAGE_TAG POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD JWT_SECRET CLOUDFLARE_API_TOKEN CADDY_ACME_EMAIL BACKEND_PORT; do
+  load_env_for_compose "$name"
+done
 
 echo "Checking compose config without starting services..."
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" config >/dev/null

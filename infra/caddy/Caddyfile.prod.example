@@ -1,19 +1,18 @@
 # Production example only. Review before using in any real environment.
-# Caddy Admin API is available only inside the Docker network because compose must not publish 2019.
+# Caddy Admin API must stay private to the Docker network because compose must not publish 2019.
 {
-  email {$ACME_EMAIL}
+  email {$CADDY_ACME_EMAIL}
   admin 0.0.0.0:2019
 }
 
-# Platform UI. Automatic public TLS would be handled by Caddy when a real domain points here.
-# For wildcard DNS-01 TLS, Caddy OSS needs a custom image with a DNS provider plugin, for example
-# a Cloudflare-enabled Caddy build. Do not put DNS provider tokens in this file.
-{$PUBLIC_DOMAIN}, panel.{$PUBLIC_DOMAIN} {
+# Platform lives at the apex domain, for example v4nex.com.
+# Customer services live under *.v4nex.com through dynamic routes loaded by the backend.
+{$DOMAIN} {
   encode zstd gzip
 
   @api path /_v4nex/* /health
   handle @api {
-    reverse_proxy backend:8000
+    reverse_proxy backend:{$BACKEND_PORT}
   }
 
   handle {
@@ -21,18 +20,14 @@
   }
 }
 
-# Optional dedicated API host for future production routing.
-api.{$PUBLIC_DOMAIN} {
-  encode zstd gzip
-  reverse_proxy backend:8000
-}
-
 # Dynamic bridge routes are expected to be loaded through the Caddy Admin API by the backend.
-# Future DNS-01 wildcard concept, not active in this example:
+# Future wildcard DNS-01 concept, not active in this example:
 #
-# *.{$PUBLIC_DOMAIN} {
+# *.{$CADDY_DOMAIN} {
 #   tls {
-#     dns cloudflare {env.DNS_PROVIDER_API_TOKEN}
+#     dns cloudflare {env.CLOUDFLARE_API_TOKEN}
 #   }
 #   reverse_proxy [target_ipv6]:80
 # }
+#
+# Caddy OSS needs a custom image with github.com/caddy-dns/cloudflare for the dns directive.

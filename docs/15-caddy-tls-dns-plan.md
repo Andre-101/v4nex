@@ -172,6 +172,7 @@ No ejecutar en este escenario:
 
 - Caddyfile productivo definitivo pendiente.
 - Imagen Caddy custom con plugin DNS pendiente.
+- Ver `docs/16-ghcr-caddy-vps-readiness.md` para la alineacion GHCR/VPS real.
 - DNS real pendiente.
 - TLS wildcard real pendiente.
 - Secret manager pendiente.
