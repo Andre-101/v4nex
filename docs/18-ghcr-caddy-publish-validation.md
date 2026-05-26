@@ -103,6 +103,8 @@ Si `docker push` falla por autenticacion, ejecutar `docker login ghcr.io` manual
 
 ## Pendientes para Escenario 19
 
+Ver `docs/19-caddy-ghcr-hardening-publish.md` para el hardening previo al push real.
+
 - Decidir si se ejecuta push real.
 - Validar pull desde GHCR con tag fijo.
 - Validar disponibilidad de GHCR desde la VPS sin deploy.
