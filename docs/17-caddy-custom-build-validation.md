@@ -93,3 +93,5 @@ Esto no valida credenciales, no contacta Cloudflare y no emite certificados.
 ## Siguiente paso hacia GHCR
 
 El siguiente escenario puede preparar build/tag/push controlado hacia GHCR con un tag fijo, pero todavia sin usar `latest`, sin deploy y sin emitir TLS.
+
+Ver `docs/18-ghcr-caddy-publish-validation.md` para el flujo manual controlado de tag, push y verificacion desde GHCR.
