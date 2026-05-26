@@ -21,8 +21,11 @@ services:
       context: ./apps/backend
     container_name: v4nex-backend
     environment:
-      ENV: ${ENV:-development}
-      DATABASE_URL: ${DATABASE_URL:-postgresql://v4nex:devpassword@db:5432/v4nex}
+      APP_ENV: ${APP_ENV:-development}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://v4nex:devpassword@db:5432/v4nex}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-dev-only-change-me}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-60}
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     depends_on:
