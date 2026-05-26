@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 from app.db.session import SessionLocal
 from app.domain.bridge_status import BridgeStatus
 from app.models.bridge import Bridge
+from app.services.caddy_activation import CaddyActivationResult
 from app.services.tcp_validator import TcpValidationResult
 
 
@@ -37,6 +38,14 @@ def create_bridge(client: TestClient, token: str, subdomain: str = "demo"):
             "target_port": 80,
         },
     )
+
+
+def set_bridge_status(bridge_id: str, status: BridgeStatus) -> None:
+    with SessionLocal() as db:
+        bridge = db.get(Bridge, bridge_id)
+        assert bridge is not None
+        bridge.status = status.value
+        db.commit()
 
 
 def test_create_bridge_without_token_fails_401(client: TestClient) -> None:
@@ -242,11 +251,7 @@ def test_validate_active_bridge_returns_invalid_state_transition(
         "app.api.routes.bridges.validate_tcp_connectivity",
         lambda host, port: TcpValidationResult(True, "TCP_OK", "ok", 12),
     )
-    with SessionLocal() as db:
-        bridge = db.get(Bridge, bridge_id)
-        assert bridge is not None
-        bridge.status = BridgeStatus.ACTIVE.value
-        db.commit()
+    set_bridge_status(bridge_id, BridgeStatus.ACTIVE)
 
     response = client.post(
         f"/_v4nex/bridges/{bridge_id}/validate",
@@ -337,16 +342,194 @@ def test_validate_fail_updates_last_tcp_validation_result(
     assert detail.json()["last_tcp_validation_result"] == "FAILED"
 
 
-def test_activate_endpoint_does_not_exist(client: TestClient) -> None:
+def test_activate_without_token_fails_401(client: TestClient) -> None:
+    response = client.post("/_v4nex/bridges/some-id/activate")
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "UNAUTHORIZED"
+
+
+def test_activate_other_users_bridge_returns_not_found(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    first_token = register_and_login(client, "first@example.com")
+    second_token = register_and_login(client, "second@example.com")
+    bridge_id = create_bridge(client, first_token, subdomain="first").json()["id"]
+    set_bridge_status(bridge_id, BridgeStatus.READY)
+    monkeypatch.setattr(
+        "app.api.routes.bridges.activate_bridge_routes",
+        lambda routes: CaddyActivationResult(True, "CADDY_OK", "ok", False, None),
+    )
+
+    response = client.post(
+        f"/_v4nex/bridges/{bridge_id}/activate",
+        headers=auth_headers(second_token),
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "BRIDGE_NOT_FOUND"
+
+
+def test_activate_draft_bridge_returns_invalid_state_transition(
+    client: TestClient,
+    monkeypatch,
+) -> None:
     token = register_and_login(client, "user@example.com")
     bridge_id = create_bridge(client, token).json()["id"]
+    monkeypatch.setattr(
+        "app.api.routes.bridges.activate_bridge_routes",
+        lambda routes: CaddyActivationResult(True, "CADDY_OK", "ok", False, None),
+    )
 
     response = client.post(
         f"/_v4nex/bridges/{bridge_id}/activate",
         headers=auth_headers(token),
     )
 
-    assert response.status_code == 404
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "INVALID_STATE_TRANSITION"
+
+
+def test_activate_ready_bridge_with_caddy_ok_becomes_active(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    token = register_and_login(client, "user@example.com")
+    bridge_id = create_bridge(client, token).json()["id"]
+    set_bridge_status(bridge_id, BridgeStatus.READY)
+    monkeypatch.setattr(
+        "app.api.routes.bridges.activate_bridge_routes",
+        lambda routes: CaddyActivationResult(True, "CADDY_OK", "ok", False, None),
+    )
+
+    response = client.post(
+        f"/_v4nex/bridges/{bridge_id}/activate",
+        headers=auth_headers(token),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ACTIVE"
+
+
+def test_activate_ready_bridge_with_caddy_fail_becomes_error(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    token = register_and_login(client, "user@example.com")
+    bridge_id = create_bridge(client, token).json()["id"]
+    set_bridge_status(bridge_id, BridgeStatus.READY)
+    monkeypatch.setattr(
+        "app.api.routes.bridges.activate_bridge_routes",
+        lambda routes: CaddyActivationResult(
+            False,
+            "CADDY_CONFIG_REJECTED",
+            "rejected",
+            True,
+            True,
+        ),
+    )
+
+    response = client.post(
+        f"/_v4nex/bridges/{bridge_id}/activate",
+        headers=auth_headers(token),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "CADDY_ACTIVATION_FAILED"
+
+    detail = client.get(f"/_v4nex/bridges/{bridge_id}", headers=auth_headers(token))
+    assert detail.json()["status"] == "ERROR"
+
+
+def test_activate_ok_updates_activated_at(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    token = register_and_login(client, "user@example.com")
+    bridge_id = create_bridge(client, token).json()["id"]
+    set_bridge_status(bridge_id, BridgeStatus.READY)
+    monkeypatch.setattr(
+        "app.api.routes.bridges.activate_bridge_routes",
+        lambda routes: CaddyActivationResult(True, "CADDY_OK", "ok", False, None),
+    )
+
+    response = client.post(
+        f"/_v4nex/bridges/{bridge_id}/activate",
+        headers=auth_headers(token),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["activated_at"] is not None
+
+
+def test_activate_ok_creates_started_and_passed_events(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    token = register_and_login(client, "user@example.com")
+    bridge_id = create_bridge(client, token).json()["id"]
+    set_bridge_status(bridge_id, BridgeStatus.READY)
+    monkeypatch.setattr(
+        "app.api.routes.bridges.activate_bridge_routes",
+        lambda routes: CaddyActivationResult(True, "CADDY_OK", "ok", False, None),
+    )
+
+    assert (
+        client.post(f"/_v4nex/bridges/{bridge_id}/activate", headers=auth_headers(token)).status_code
+        == 200
+    )
+    events = client.get(f"/_v4nex/bridges/{bridge_id}/events", headers=auth_headers(token))
+    event_types = [event["event_type"] for event in events.json()]
+
+    assert "CADDY_ACTIVATION_STARTED" in event_types
+    assert "CADDY_ACTIVATION_PASSED" in event_types
+
+
+def test_activate_fail_creates_started_and_failed_events(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    token = register_and_login(client, "user@example.com")
+    bridge_id = create_bridge(client, token).json()["id"]
+    set_bridge_status(bridge_id, BridgeStatus.READY)
+    monkeypatch.setattr(
+        "app.api.routes.bridges.activate_bridge_routes",
+        lambda routes: CaddyActivationResult(False, "CADDY_CONFIG_REJECTED", "rejected", True, True),
+    )
+
+    assert (
+        client.post(f"/_v4nex/bridges/{bridge_id}/activate", headers=auth_headers(token)).status_code
+        == 409
+    )
+    events = client.get(f"/_v4nex/bridges/{bridge_id}/events", headers=auth_headers(token))
+    event_types = [event["event_type"] for event in events.json()]
+
+    assert "CADDY_ACTIVATION_STARTED" in event_types
+    assert "CADDY_ACTIVATION_FAILED" in event_types
+
+
+def test_activate_fail_returns_rollback_details(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    token = register_and_login(client, "user@example.com")
+    bridge_id = create_bridge(client, token).json()["id"]
+    set_bridge_status(bridge_id, BridgeStatus.READY)
+    monkeypatch.setattr(
+        "app.api.routes.bridges.activate_bridge_routes",
+        lambda routes: CaddyActivationResult(False, "CADDY_CONFIG_REJECTED", "rejected", True, False),
+    )
+
+    response = client.post(
+        f"/_v4nex/bridges/{bridge_id}/activate",
+        headers=auth_headers(token),
+    )
+
+    details = response.json()["error"]["details"]
+    assert details["error_code"] == "CADDY_CONFIG_REJECTED"
+    assert details["rollback_attempted"] is True
+    assert details["rollback_ok"] is False
 
 
 def test_disable_endpoint_does_not_exist(client: TestClient) -> None:

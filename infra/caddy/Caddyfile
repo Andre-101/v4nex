@@ -1,3 +1,8 @@
+{
+  admin 0.0.0.0:2019
+  auto_https off
+}
+
 :8080 {
   @api path /_v4nex/* /health
 
