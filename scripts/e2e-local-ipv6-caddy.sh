@@ -87,7 +87,14 @@ echo "[e2e] Building backend image"
 docker compose build backend
 
 echo "[e2e] Starting PostgreSQL and IPv6 demo service"
-docker compose up -d db demo-ipv6
+if ! docker compose up -d db demo-ipv6; then
+  cat >&2 <<MSG
+[e2e] Failed to start db/demo-ipv6.
+[e2e] If the error mentions IPv6, your Docker daemon may not support IPv6 networks yet.
+[e2e] Check Docker daemon IPv6 settings, then retry.
+MSG
+  exit 1
+fi
 
 echo "[e2e] Running Alembic migrations"
 docker compose run --rm backend alembic upgrade head
@@ -104,6 +111,27 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 curl -fsS "$BACKEND_URL/health" >/dev/null
+
+echo "[e2e] Checking demo IPv6 TCP reachability from backend container"
+if ! docker compose exec -T backend python - "$DEMO_IPV6" <<'PY'
+import socket
+import sys
+
+host = sys.argv[1]
+sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+sock.settimeout(3)
+try:
+    sock.connect((host, 80, 0, 0))
+finally:
+    sock.close()
+PY
+then
+  cat >&2 <<MSG
+[e2e] Backend could not connect to demo-ipv6 at [$DEMO_IPV6]:80.
+[e2e] This usually means Docker IPv6 networking is unavailable or the demo service failed to bind IPv6.
+MSG
+  exit 1
+fi
 
 echo "[e2e] Registering user $EMAIL"
 request -X POST "$BACKEND_URL/_v4nex/auth/register" \

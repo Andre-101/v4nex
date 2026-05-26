@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import threading
 
 from app.services.caddy_client import CaddyAdminClient, CaddyClientError
 from app.services.caddy_config import CaddyBridgeRoute, build_caddy_config
@@ -9,6 +10,8 @@ CADDY_ADMIN_UNREACHABLE = "CADDY_ADMIN_UNREACHABLE"
 CADDY_CONFIG_REJECTED = "CADDY_CONFIG_REJECTED"
 CADDY_ROLLBACK_FAILED = "CADDY_ROLLBACK_FAILED"
 CADDY_UNKNOWN_ERROR = "CADDY_UNKNOWN_ERROR"
+
+_caddy_config_lock = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -35,6 +38,14 @@ def disable_bridge_routes(
 
 
 def apply_bridge_routes(
+    routes: list[CaddyBridgeRoute],
+    client: CaddyAdminClient | None = None,
+) -> CaddyActivationResult:
+    with _caddy_config_lock:
+        return _apply_bridge_routes_unlocked(routes, client=client)
+
+
+def _apply_bridge_routes_unlocked(
     routes: list[CaddyBridgeRoute],
     client: CaddyAdminClient | None = None,
 ) -> CaddyActivationResult:

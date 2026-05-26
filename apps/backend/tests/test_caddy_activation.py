@@ -5,6 +5,7 @@ from app.services.caddy_activation import (
     activate_bridge_routes,
     disable_bridge_routes,
 )
+import app.services.caddy_activation as caddy_activation
 from app.services.caddy_client import CaddyClientError
 from app.services.caddy_config import CaddyBridgeRoute, build_caddy_config
 
@@ -94,3 +95,27 @@ def test_caddy_config_disables_automatic_https_for_dev() -> None:
     config = build_caddy_config([route()])
 
     assert config["apps"]["http"]["servers"]["srv0"]["automatic_https"] == {"disable": True}
+
+
+class FakeLock:
+    def __init__(self) -> None:
+        self.entered = False
+        self.exited = False
+
+    def __enter__(self):
+        self.entered = True
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        self.exited = True
+
+
+def test_caddy_apply_uses_local_lock(monkeypatch) -> None:
+    fake_lock = FakeLock()
+    monkeypatch.setattr(caddy_activation, "_caddy_config_lock", fake_lock)
+
+    result = activate_bridge_routes([route()], client=FakeCaddyClient())
+
+    assert result.ok is True
+    assert fake_lock.entered is True
+    assert fake_lock.exited is True
