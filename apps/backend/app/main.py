@@ -6,6 +6,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.api.routes.admin import router as admin_router
 from app.api.routes.auth import router as auth_router
 from app.api.routes.bridges import router as bridges_router
 from app.api.routes.health import router as health_router
@@ -27,6 +28,7 @@ app = FastAPI(title="v4nex-backend", version="0.1.0", lifespan=lifespan)
 app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(bridges_router)
+app.include_router(admin_router)
 
 
 @app.exception_handler(AppError)
