@@ -33,4 +33,7 @@ def build_diagnostics(db: Session) -> dict:
         "database_url_driver": database_url_driver(settings.database_url),
         "caddy_admin_reachable": is_caddy_admin_reachable(),
         "active_bridges_count": active_count or 0,
+        "rate_limit_enabled": settings.rate_limit_enabled,
+        "max_bridges_per_user": settings.max_bridges_per_user,
+        "admin_endpoints_protected": True,
     }

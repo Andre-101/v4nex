@@ -1,12 +1,13 @@
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.config import settings
 from app.core.errors import AppError, ErrorCode
+from app.core.rate_limit import check_rate_limit
 from app.db.session import get_db
 from app.domain.bridge_status import BridgeStatus
 from app.domain.state_machine import assert_valid_transition
@@ -172,6 +173,15 @@ def create_bridge(
     subdomain = validate_subdomain(payload.subdomain)
     target_ipv6 = validate_ipv6(payload.target_ipv6)
     target_port = validate_port(payload.target_port)
+    bridge_count = db.scalar(
+        select(func.count()).select_from(Bridge).where(Bridge.user_id == current_user.id)
+    )
+    if (bridge_count or 0) >= settings.max_bridges_per_user:
+        raise AppError(
+            code=ErrorCode.BRIDGE_QUOTA_EXCEEDED,
+            message="Bridge quota exceeded for this user.",
+            details={"max_bridges_per_user": settings.max_bridges_per_user},
+        )
 
     existing_bridge = db.scalar(select(Bridge).where(Bridge.subdomain == subdomain))
     if existing_bridge is not None:
@@ -237,6 +247,11 @@ def validate_bridge(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> BridgeResponse:
+    check_rate_limit(
+        "bridges.validate",
+        current_user.id,
+        max_requests=settings.rate_limit_strict_max_requests,
+    )
     bridge = get_owned_bridge(bridge_id, current_user, db)
     current_status = BridgeStatus(bridge.status)
 
@@ -301,6 +316,11 @@ def activate_bridge(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> BridgeResponse:
+    check_rate_limit(
+        "bridges.activate",
+        current_user.id,
+        max_requests=settings.rate_limit_strict_max_requests,
+    )
     bridge = get_owned_bridge(bridge_id, current_user, db)
     current_status = BridgeStatus(bridge.status)
 
@@ -360,6 +380,11 @@ def disable_bridge(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> BridgeResponse:
+    check_rate_limit(
+        "bridges.disable",
+        current_user.id,
+        max_requests=settings.rate_limit_strict_max_requests,
+    )
     bridge = get_owned_bridge(bridge_id, current_user, db)
     current_status = BridgeStatus(bridge.status)
 

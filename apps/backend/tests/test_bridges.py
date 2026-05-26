@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 from app.db.session import SessionLocal
 from app.domain.bridge_status import BridgeStatus
 from app.models.bridge import Bridge
+from app.core.config import settings
 from app.services.caddy_activation import CaddyActivationResult
 from app.services.tcp_validator import TcpValidationResult
 
@@ -128,6 +129,37 @@ def test_create_bridge_with_duplicate_subdomain_fails(client: TestClient) -> Non
 
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "SUBDOMAIN_ALREADY_EXISTS"
+
+
+def test_bridge_quota_allows_until_limit(client: TestClient, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "max_bridges_per_user", 2)
+    token = register_and_login(client, "user@example.com")
+
+    assert create_bridge(client, token, subdomain="first").status_code == 201
+    assert create_bridge(client, token, subdomain="second").status_code == 201
+
+
+def test_bridge_quota_blocks_additional_bridge(client: TestClient, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "max_bridges_per_user", 2)
+    token = register_and_login(client, "user@example.com")
+    assert create_bridge(client, token, subdomain="first").status_code == 201
+    assert create_bridge(client, token, subdomain="second").status_code == 201
+
+    response = create_bridge(client, token, subdomain="third")
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "BRIDGE_QUOTA_EXCEEDED"
+
+
+def test_bridge_quota_is_per_user(client: TestClient, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "max_bridges_per_user", 1)
+    first_token = register_and_login(client, "first@example.com")
+    second_token = register_and_login(client, "second@example.com")
+    assert create_bridge(client, first_token, subdomain="first").status_code == 201
+
+    response = create_bridge(client, second_token, subdomain="second")
+
+    assert response.status_code == 201
 
 
 def test_list_bridges_returns_only_authenticated_users_bridges(client: TestClient) -> None:

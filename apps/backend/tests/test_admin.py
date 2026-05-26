@@ -1,8 +1,12 @@
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from app.db.session import SessionLocal
 from app.domain.bridge_status import BridgeStatus
+from app.domain.user_role import UserRole
+from app.models.admin_audit_event import AdminAuditEvent
 from app.models.bridge import Bridge
+from app.models.user import User
 from app.services.caddy_activation import CaddyActivationResult
 
 
@@ -44,6 +48,20 @@ def set_bridge_status(bridge_id: str, status: BridgeStatus) -> None:
         db.commit()
 
 
+def promote_user_to_admin(email: str) -> None:
+    with SessionLocal() as db:
+        user = db.scalar(select(User).where(User.email == email))
+        assert user is not None
+        user.role = UserRole.ADMIN.value
+        db.commit()
+
+
+def admin_token(client: TestClient, email: str = "admin@example.com") -> str:
+    token = register_and_login(client, email)
+    promote_user_to_admin(email)
+    return token
+
+
 def test_reconcile_requires_auth(client: TestClient) -> None:
     response = client.post("/_v4nex/admin/reconcile-caddy")
 
@@ -58,9 +76,27 @@ def test_diagnostics_requires_auth(client: TestClient) -> None:
     assert response.json()["error"]["code"] == "UNAUTHORIZED"
 
 
+def test_reconcile_rejects_user_token(client: TestClient) -> None:
+    token = register_and_login(client)
+
+    response = client.post("/_v4nex/admin/reconcile-caddy", headers=auth_headers(token))
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "FORBIDDEN"
+
+
+def test_diagnostics_rejects_user_token(client: TestClient) -> None:
+    token = register_and_login(client)
+
+    response = client.get("/_v4nex/admin/diagnostics", headers=auth_headers(token))
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "FORBIDDEN"
+
+
 def test_reconcile_calls_caddy_with_only_active_routes(client: TestClient, monkeypatch) -> None:
     captured_routes = []
-    token = register_and_login(client)
+    token = admin_token(client)
     active_id = create_bridge(client, token, "active-one").json()["id"]
     draft_id = create_bridge(client, token, "draft-one").json()["id"]
     set_bridge_status(active_id, BridgeStatus.ACTIVE)
@@ -81,7 +117,7 @@ def test_reconcile_calls_caddy_with_only_active_routes(client: TestClient, monke
 
 
 def test_diagnostics_does_not_expose_secrets(client: TestClient, monkeypatch) -> None:
-    token = register_and_login(client)
+    token = admin_token(client)
     monkeypatch.setattr("app.services.diagnostics.is_caddy_admin_reachable", lambda: True)
 
     response = client.get("/_v4nex/admin/diagnostics", headers=auth_headers(token))
@@ -94,3 +130,39 @@ def test_diagnostics_does_not_expose_secrets(client: TestClient, monkeypatch) ->
     assert "password" not in serialized.lower()
     assert "devpassword" not in serialized
     assert body["database_url_driver"] == "sqlite"
+    assert body["rate_limit_enabled"] is True
+    assert body["max_bridges_per_user"] == 5
+    assert body["admin_endpoints_protected"] is True
+
+
+def test_reconcile_creates_admin_audit_events(client: TestClient, monkeypatch) -> None:
+    token = admin_token(client)
+    monkeypatch.setattr(
+        "app.services.caddy_reconciler.apply_bridge_routes",
+        lambda routes: CaddyActivationResult(True, "CADDY_OK", "ok", False, None),
+    )
+
+    response = client.post("/_v4nex/admin/reconcile-caddy", headers=auth_headers(token))
+
+    assert response.status_code == 200
+    with SessionLocal() as db:
+        actions = [event.action for event in db.query(AdminAuditEvent).order_by(AdminAuditEvent.created_at)]
+    assert "ADMIN_RECONCILE_CADDY_STARTED" in actions
+    assert "ADMIN_RECONCILE_CADDY_FINISHED" in actions
+
+
+def test_diagnostics_creates_admin_audit_event_without_secrets(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    token = admin_token(client)
+    monkeypatch.setattr("app.services.diagnostics.is_caddy_admin_reachable", lambda: True)
+
+    response = client.get("/_v4nex/admin/diagnostics", headers=auth_headers(token))
+
+    assert response.status_code == 200
+    with SessionLocal() as db:
+        event = db.query(AdminAuditEvent).filter_by(action="ADMIN_DIAGNOSTICS_VIEWED").one()
+    serialized = str(event.event_metadata).lower()
+    assert "secret" not in serialized
+    assert "password" not in serialized

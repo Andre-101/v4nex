@@ -14,6 +14,11 @@ class Settings(BaseModel):
     access_token_expire_minutes: int = 60
     caddy_admin_url: str = "http://caddy:2019"
     caddy_admin_timeout_seconds: float = 3.0
+    max_bridges_per_user: int = 5
+    rate_limit_enabled: bool = True
+    rate_limit_window_seconds: int = 60
+    rate_limit_max_requests: int = 30
+    rate_limit_strict_max_requests: int = 10
 
 
 def get_settings() -> Settings:
@@ -36,6 +41,35 @@ def get_settings() -> Settings:
             os.getenv(
                 "CADDY_ADMIN_TIMEOUT_SECONDS",
                 str(Settings.model_fields["caddy_admin_timeout_seconds"].default),
+            )
+        ),
+        max_bridges_per_user=int(
+            os.getenv(
+                "MAX_BRIDGES_PER_USER",
+                str(Settings.model_fields["max_bridges_per_user"].default),
+            )
+        ),
+        rate_limit_enabled=os.getenv(
+            "RATE_LIMIT_ENABLED",
+            str(Settings.model_fields["rate_limit_enabled"].default),
+        ).lower()
+        in {"1", "true", "yes", "on"},
+        rate_limit_window_seconds=int(
+            os.getenv(
+                "RATE_LIMIT_WINDOW_SECONDS",
+                str(Settings.model_fields["rate_limit_window_seconds"].default),
+            )
+        ),
+        rate_limit_max_requests=int(
+            os.getenv(
+                "RATE_LIMIT_MAX_REQUESTS",
+                str(Settings.model_fields["rate_limit_max_requests"].default),
+            )
+        ),
+        rate_limit_strict_max_requests=int(
+            os.getenv(
+                "RATE_LIMIT_STRICT_MAX_REQUESTS",
+                str(Settings.model_fields["rate_limit_strict_max_requests"].default),
             )
         ),
     )
