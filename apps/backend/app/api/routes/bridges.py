@@ -15,6 +15,8 @@ from app.models.bridge import Bridge
 from app.models.bridge_event import BridgeEvent
 from app.models.user import User
 from app.schemas.bridges import BridgeCreateRequest, BridgeEventResponse, BridgeResponse
+from app.services.caddy_activation import CaddyActivationResult, activate_bridge_routes
+from app.services.caddy_config import CaddyBridgeRoute
 from app.services.tcp_validator import TcpValidationResult, validate_tcp_connectivity
 
 
@@ -92,6 +94,48 @@ def validation_metadata(bridge: Bridge, result: TcpValidationResult | None = Non
             }
         )
     return metadata
+
+
+def activation_metadata(
+    bridge: Bridge,
+    result: CaddyActivationResult | None = None,
+) -> dict:
+    metadata = {
+        "subdomain": bridge.subdomain,
+        "public_url": bridge.public_url,
+        "target_ipv6": bridge.target_ipv6,
+        "target_port": bridge.target_port,
+    }
+    if result is not None:
+        metadata.update(
+            {
+                "error_code": result.error_code,
+                "rollback_attempted": result.rollback_attempted,
+                "rollback_ok": result.rollback_ok,
+            }
+        )
+    return metadata
+
+
+def bridge_to_caddy_route(bridge: Bridge) -> CaddyBridgeRoute:
+    return CaddyBridgeRoute(
+        subdomain=bridge.subdomain,
+        public_domain=settings.public_domain,
+        target_ipv6=bridge.target_ipv6,
+        target_port=bridge.target_port,
+    )
+
+
+def active_routes_with_candidate(db: Session, bridge: Bridge) -> list[CaddyBridgeRoute]:
+    active_bridges = db.scalars(
+        select(Bridge)
+        .where(Bridge.status == BridgeStatus.ACTIVE.value)
+        .where(Bridge.id != bridge.id)
+        .order_by(Bridge.created_at)
+    ).all()
+    return [bridge_to_caddy_route(active_bridge) for active_bridge in active_bridges] + [
+        bridge_to_caddy_route(bridge)
+    ]
 
 
 @router.get("", response_model=list[BridgeResponse])
@@ -233,5 +277,64 @@ def validate_bridge(
             "error_code": result.error_code,
             "message": result.message,
             "latency_ms": result.latency_ms,
+        },
+    )
+
+
+@router.post("/{bridge_id}/activate", response_model=BridgeResponse)
+def activate_bridge(
+    bridge_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> BridgeResponse:
+    bridge = get_owned_bridge(bridge_id, current_user, db)
+    current_status = BridgeStatus(bridge.status)
+
+    assert_valid_transition(current_status, BridgeStatus.ACTIVE)
+    add_bridge_event(
+        db=db,
+        bridge=bridge,
+        event_type="CADDY_ACTIVATION_STARTED",
+        message="Caddy activation started.",
+        metadata=activation_metadata(bridge),
+    )
+    db.commit()
+    db.refresh(bridge)
+
+    result = activate_bridge_routes(active_routes_with_candidate(db, bridge))
+    if result.ok:
+        assert_valid_transition(BridgeStatus.READY, BridgeStatus.ACTIVE)
+        bridge.status = BridgeStatus.ACTIVE.value
+        bridge.activated_at = datetime.now(UTC)
+        add_bridge_event(
+            db=db,
+            bridge=bridge,
+            event_type="CADDY_ACTIVATION_PASSED",
+            message=result.message,
+            metadata=activation_metadata(bridge, result),
+        )
+        db.commit()
+        db.refresh(bridge)
+        return bridge_to_response(bridge)
+
+    assert_valid_transition(BridgeStatus.READY, BridgeStatus.ERROR)
+    bridge.status = BridgeStatus.ERROR.value
+    add_bridge_event(
+        db=db,
+        bridge=bridge,
+        event_type="CADDY_ACTIVATION_FAILED",
+        message=result.message,
+        metadata=activation_metadata(bridge, result),
+    )
+    db.commit()
+
+    raise AppError(
+        code=ErrorCode.CADDY_ACTIVATION_FAILED,
+        message="Caddy activation failed. v4nex could not load the dynamic route.",
+        details={
+            "error_code": result.error_code,
+            "message": result.message,
+            "rollback_attempted": result.rollback_attempted,
+            "rollback_ok": result.rollback_ok,
         },
     )

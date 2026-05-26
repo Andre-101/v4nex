@@ -12,6 +12,8 @@ class Settings(BaseModel):
     jwt_secret_key: str = "dev-only-change-me"
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60
+    caddy_admin_url: str = "http://caddy:2019"
+    caddy_admin_timeout_seconds: float = 3.0
 
 
 def get_settings() -> Settings:
@@ -24,6 +26,16 @@ def get_settings() -> Settings:
             os.getenv(
                 "ACCESS_TOKEN_EXPIRE_MINUTES",
                 str(Settings.model_fields["access_token_expire_minutes"].default),
+            )
+        ),
+        caddy_admin_url=os.getenv(
+            "CADDY_ADMIN_URL",
+            Settings.model_fields["caddy_admin_url"].default,
+        ),
+        caddy_admin_timeout_seconds=float(
+            os.getenv(
+                "CADDY_ADMIN_TIMEOUT_SECONDS",
+                str(Settings.model_fields["caddy_admin_timeout_seconds"].default),
             )
         ),
     )
