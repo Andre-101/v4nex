@@ -8,7 +8,7 @@ Este escenario documenta comportamiento esperado, estructura de pantallas, mensa
 
 ## Resumen ejecutivo del flujo MVP
 
-El MVP permite que una persona entienda la propuesta de v4nex, cree una cuenta conceptual, acceda a un dashboard y configure un bridge básico asociando un subdominio público con una dirección IPv6 y el puerto HTTP `80`.
+El MVP permite que una persona entienda la propuesta de v4nex, recorra el flujo de cuenta documentado en UX, acceda a un dashboard y configure un bridge básico asociando un subdominio público con una dirección IPv6 y el puerto HTTP `80`. La implementación funcional del flujo de cuenta queda para escenarios posteriores.
 
 Flujo principal:
 
@@ -82,7 +82,18 @@ Pantalla principal posterior al acceso.
 
 Objetivo principal:
 
-- Mostrar lista de bridges, estados y acceso rápido a crear uno nuevo.
+- Mostrar lista de bridges, estados, métricas mínimas operativas y acceso rápido a crear uno nuevo.
+
+Métricas mínimas obligatorias:
+
+- Estado del bridge.
+- Subdominio asignado.
+- IPv6 destino.
+- Puerto destino.
+- Última validación TCP.
+- Último heartbeat.
+- Tiempo activo.
+- Eventos recientes.
 
 Acciones:
 
@@ -113,7 +124,18 @@ Pantalla de inspección de un bridge existente.
 
 Objetivo principal:
 
-- Mostrar configuración, URL pública, destino IPv6, puerto, estado y acciones disponibles según estado.
+- Mostrar configuración, URL pública, métricas mínimas operativas y acciones disponibles según estado.
+
+Métricas mínimas obligatorias:
+
+- Estado del bridge.
+- Subdominio asignado.
+- IPv6 destino.
+- Puerto destino.
+- Última validación TCP.
+- Último heartbeat.
+- Tiempo activo.
+- Eventos recientes.
 
 Acciones:
 
@@ -171,7 +193,7 @@ Notas:
 
 Notas:
 
-- Wireframe conceptual. No implica login funcional ni persistencia real en este escenario.
+- El flujo de cuenta se documenta en UX, pero su implementación funcional queda para escenarios posteriores.
 - Mensajes de validación de formulario quedan como referencia visual, no implementación.
 
 ### Login
@@ -196,34 +218,36 @@ Notas:
 
 Notas:
 
-- Wireframe conceptual. No agrega autenticación funcional.
+- El flujo de cuenta se documenta en UX, pero su implementación funcional queda para escenarios posteriores.
 - No incluir recuperación de contraseña en el MVP.
 
 ### Dashboard
 
 ```text
-+------------------------------------------------------------+
-| v4nex Dashboard                              [Crear bridge] |
-+------------------------------------------------------------+
-| Bridges                                                    |
-|                                                            |
-| +----------------------+----------------------+----------+ |
-| | Subdominio           | Destino              | Estado   | |
-| +----------------------+----------------------+----------+ |
-| | demo.v4nex.com       | [IPv6]:80            | Active   | |
-| | staging.v4nex.com    | [IPv6]:80            | Ready    | |
-| | test.v4nex.com       | [IPv6]:80            | Error    | |
-| +----------------------+----------------------+----------+ |
-|                                                            |
-| Estado vacío:                                              |
-| Aún no tienes bridges. Crea el primero para validar IPv6.   |
-+------------------------------------------------------------+
++--------------------------------------------------------------------------+
+| v4nex Dashboard                                            [Crear bridge] |
++--------------------------------------------------------------------------+
+| Bridges                                                                  |
+|                                                                          |
+| +------------------+---------+-------------+--------+-----------+-------+ |
+| | Subdominio       | Estado  | IPv6 destino | Puerto | TCP val.  | HB    | |
+| +------------------+---------+-------------+--------+-----------+-------+ |
+| | demo.v4nex.com   | Active  | 2800:...     | 80     | OK 10:42  | 10:45 | |
+| | staging.v4nex... | Ready   | 2800:...     | 80     | OK 09:12  | -     | |
+| | test.v4nex.com   | Error   | 2800:...     | 80     | Falló     | -     | |
+| +------------------+---------+-------------+--------+-----------+-------+ |
+|                                                                          |
+| Estado vacío:                                                            |
+| Aún no tienes bridges. Crea el primero para validar IPv6.                 |
++--------------------------------------------------------------------------+
 ```
 
 Notas:
 
 - Cada fila debe abrir el detalle del bridge.
 - El estado visual debe ser legible sin depender solo del color.
+- La vista de lista debe exponer como mínimo subdominio, estado, IPv6 destino, puerto, última validación TCP y último heartbeat.
+- Tiempo activo y eventos recientes pueden aparecer como resumen secundario o en el detalle del bridge.
 
 ### Crear bridge wizard
 
@@ -281,12 +305,18 @@ Notas:
 | URL pública                                                |
 | https://mi-servicio.v4nex.com                    [Copiar]  |
 |                                                            |
-| Destino                                                    |
-| IPv6: 2800:...                                             |
-| Puerto: 80                                                 |
+| Configuración                                              |
+| Subdominio asignado: mi-servicio.v4nex.com                 |
+| IPv6 destino: 2800:...                                     |
+| Puerto destino: 80                                         |
 |                                                            |
 | Estado actual                                              |
 | Active                                                     |
+|                                                            |
+| Métricas mínimas                                           |
+| Última validación TCP: OK, 10:42                           |
+| Último heartbeat: OK, 10:45                                |
+| Tiempo activo: 2h 14m                                      |
 |                                                            |
 | Eventos recientes                                          |
 | - Validación TCP exitosa                                   |
@@ -374,15 +404,31 @@ Mensaje:
 
 > Este subdominio está reservado. Elige otro nombre.
 
-Ejemplos reservados:
+Lista mínima oficial de subdominios reservados:
 
 - `www`
 - `api`
 - `admin`
+- `panel`
+- `login`
+- `dashboard`
+- `status`
+- `mail`
+- `smtp`
+- `ftp`
+- `ssh`
 - `root`
 - `support`
-- `status`
+- `billing`
+- `docs`
+- `dev`
+- `test`
+
+Reservado técnico adicional:
+
 - `_v4nex`
+
+`_v4nex` también queda bloqueado por la ruta interna de plataforma `/_v4nex/*`.
 
 ### Subdominio duplicado
 
