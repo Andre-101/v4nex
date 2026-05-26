@@ -14,6 +14,9 @@ class CaddyBridgeRoute:
 
 def build_caddy_config(routes: list[CaddyBridgeRoute]) -> dict[str, Any]:
     return {
+        "admin": {
+            "listen": "0.0.0.0:2019",
+        },
         "apps": {
             "http": {
                 "servers": {

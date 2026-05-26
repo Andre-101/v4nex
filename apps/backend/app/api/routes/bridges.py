@@ -15,7 +15,11 @@ from app.models.bridge import Bridge
 from app.models.bridge_event import BridgeEvent
 from app.models.user import User
 from app.schemas.bridges import BridgeCreateRequest, BridgeEventResponse, BridgeResponse
-from app.services.caddy_activation import CaddyActivationResult, activate_bridge_routes
+from app.services.caddy_activation import (
+    CaddyActivationResult,
+    activate_bridge_routes,
+    disable_bridge_routes,
+)
 from app.services.caddy_config import CaddyBridgeRoute
 from app.services.tcp_validator import TcpValidationResult, validate_tcp_connectivity
 
@@ -136,6 +140,16 @@ def active_routes_with_candidate(db: Session, bridge: Bridge) -> list[CaddyBridg
     return [bridge_to_caddy_route(active_bridge) for active_bridge in active_bridges] + [
         bridge_to_caddy_route(bridge)
     ]
+
+
+def active_routes_without_bridge(db: Session, bridge: Bridge) -> list[CaddyBridgeRoute]:
+    active_bridges = db.scalars(
+        select(Bridge)
+        .where(Bridge.status == BridgeStatus.ACTIVE.value)
+        .where(Bridge.id != bridge.id)
+        .order_by(Bridge.created_at)
+    ).all()
+    return [bridge_to_caddy_route(active_bridge) for active_bridge in active_bridges]
 
 
 @router.get("", response_model=list[BridgeResponse])
@@ -331,6 +345,65 @@ def activate_bridge(
     raise AppError(
         code=ErrorCode.CADDY_ACTIVATION_FAILED,
         message="Caddy activation failed. v4nex could not load the dynamic route.",
+        details={
+            "error_code": result.error_code,
+            "message": result.message,
+            "rollback_attempted": result.rollback_attempted,
+            "rollback_ok": result.rollback_ok,
+        },
+    )
+
+
+@router.post("/{bridge_id}/disable", response_model=BridgeResponse)
+def disable_bridge(
+    bridge_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> BridgeResponse:
+    bridge = get_owned_bridge(bridge_id, current_user, db)
+    current_status = BridgeStatus(bridge.status)
+
+    assert_valid_transition(current_status, BridgeStatus.DISABLED)
+    add_bridge_event(
+        db=db,
+        bridge=bridge,
+        event_type="CADDY_DISABLE_STARTED",
+        message="Caddy disable started.",
+        metadata=activation_metadata(bridge),
+    )
+    db.commit()
+    db.refresh(bridge)
+
+    result = disable_bridge_routes(active_routes_without_bridge(db, bridge))
+    if result.ok:
+        assert_valid_transition(BridgeStatus.ACTIVE, BridgeStatus.DISABLED)
+        bridge.status = BridgeStatus.DISABLED.value
+        bridge.disabled_at = datetime.now(UTC)
+        add_bridge_event(
+            db=db,
+            bridge=bridge,
+            event_type="CADDY_DISABLE_PASSED",
+            message=result.message,
+            metadata=activation_metadata(bridge, result),
+        )
+        db.commit()
+        db.refresh(bridge)
+        return bridge_to_response(bridge)
+
+    assert_valid_transition(BridgeStatus.ACTIVE, BridgeStatus.ERROR)
+    bridge.status = BridgeStatus.ERROR.value
+    add_bridge_event(
+        db=db,
+        bridge=bridge,
+        event_type="CADDY_DISABLE_FAILED",
+        message=result.message,
+        metadata=activation_metadata(bridge, result),
+    )
+    db.commit()
+
+    raise AppError(
+        code=ErrorCode.CADDY_DISABLE_FAILED,
+        message="Caddy disable failed. v4nex could not remove the dynamic route.",
         details={
             "error_code": result.error_code,
             "message": result.message,

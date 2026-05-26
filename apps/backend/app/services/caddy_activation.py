@@ -24,6 +24,20 @@ def activate_bridge_routes(
     routes: list[CaddyBridgeRoute],
     client: CaddyAdminClient | None = None,
 ) -> CaddyActivationResult:
+    return apply_bridge_routes(routes, client=client)
+
+
+def disable_bridge_routes(
+    routes: list[CaddyBridgeRoute],
+    client: CaddyAdminClient | None = None,
+) -> CaddyActivationResult:
+    return apply_bridge_routes(routes, client=client)
+
+
+def apply_bridge_routes(
+    routes: list[CaddyBridgeRoute],
+    client: CaddyAdminClient | None = None,
+) -> CaddyActivationResult:
     caddy_client = client or CaddyAdminClient()
 
     try:
