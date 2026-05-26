@@ -1,0 +1,137 @@
+from fastapi import APIRouter, Depends, status
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.api.deps import get_current_user
+from app.core.config import settings
+from app.core.errors import AppError, ErrorCode
+from app.db.session import get_db
+from app.domain.bridge_status import BridgeStatus
+from app.domain.validators import validate_ipv6, validate_port, validate_subdomain
+from app.models.bridge import Bridge
+from app.models.bridge_event import BridgeEvent
+from app.models.user import User
+from app.schemas.bridges import BridgeCreateRequest, BridgeEventResponse, BridgeResponse
+
+
+router = APIRouter(prefix="/_v4nex/bridges", tags=["bridges"])
+
+
+def bridge_to_response(bridge: Bridge) -> BridgeResponse:
+    return BridgeResponse(
+        id=bridge.id,
+        subdomain=bridge.subdomain,
+        public_url=bridge.public_url,
+        target_ipv6=bridge.target_ipv6,
+        target_port=bridge.target_port,
+        status=BridgeStatus(bridge.status),
+        last_tcp_validation_at=bridge.last_tcp_validation_at,
+        last_tcp_validation_result=bridge.last_tcp_validation_result,
+        last_heartbeat_at=bridge.last_heartbeat_at,
+        last_heartbeat_result=bridge.last_heartbeat_result,
+        activated_at=bridge.activated_at,
+        disabled_at=bridge.disabled_at,
+        created_at=bridge.created_at,
+        updated_at=bridge.updated_at,
+    )
+
+
+def event_to_response(event: BridgeEvent) -> BridgeEventResponse:
+    return BridgeEventResponse(
+        id=event.id,
+        bridge_id=event.bridge_id,
+        event_type=event.event_type,
+        message=event.message,
+        metadata=event.event_metadata,
+        created_at=event.created_at,
+    )
+
+
+def get_owned_bridge(bridge_id: str, user: User, db: Session) -> Bridge:
+    bridge = db.get(Bridge, bridge_id)
+    if bridge is None or bridge.user_id != user.id:
+        raise AppError(
+            code=ErrorCode.BRIDGE_NOT_FOUND,
+            message="Bridge was not found.",
+            details={"bridge_id": bridge_id},
+        )
+    return bridge
+
+
+@router.get("", response_model=list[BridgeResponse])
+def list_bridges(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[BridgeResponse]:
+    bridges = db.scalars(
+        select(Bridge).where(Bridge.user_id == current_user.id).order_by(Bridge.created_at)
+    ).all()
+    return [bridge_to_response(bridge) for bridge in bridges]
+
+
+@router.post("", response_model=BridgeResponse, status_code=status.HTTP_201_CREATED)
+def create_bridge(
+    payload: BridgeCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> BridgeResponse:
+    subdomain = validate_subdomain(payload.subdomain)
+    target_ipv6 = validate_ipv6(payload.target_ipv6)
+    target_port = validate_port(payload.target_port)
+
+    existing_bridge = db.scalar(select(Bridge).where(Bridge.subdomain == subdomain))
+    if existing_bridge is not None:
+        raise AppError(
+            code=ErrorCode.SUBDOMAIN_ALREADY_EXISTS,
+            message="Subdomain already exists.",
+            details={"subdomain": subdomain},
+        )
+
+    public_url = f"https://{subdomain}.{settings.public_domain}"
+    bridge = Bridge(
+        user_id=current_user.id,
+        subdomain=subdomain,
+        public_url=public_url,
+        target_ipv6=target_ipv6,
+        target_port=target_port,
+        status=BridgeStatus.DRAFT.value,
+    )
+    db.add(bridge)
+    db.flush()
+
+    db.add(
+        BridgeEvent(
+            bridge_id=bridge.id,
+            event_type="BRIDGE_CREATED",
+            message="Bridge created in DRAFT status.",
+            event_metadata={},
+        )
+    )
+    db.commit()
+    db.refresh(bridge)
+
+    return bridge_to_response(bridge)
+
+
+@router.get("/{bridge_id}", response_model=BridgeResponse)
+def get_bridge(
+    bridge_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> BridgeResponse:
+    return bridge_to_response(get_owned_bridge(bridge_id, current_user, db))
+
+
+@router.get("/{bridge_id}/events", response_model=list[BridgeEventResponse])
+def list_bridge_events(
+    bridge_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[BridgeEventResponse]:
+    bridge = get_owned_bridge(bridge_id, current_user, db)
+    events = db.scalars(
+        select(BridgeEvent)
+        .where(BridgeEvent.bridge_id == bridge.id)
+        .order_by(BridgeEvent.created_at)
+    ).all()
+    return [event_to_response(event) for event in events]

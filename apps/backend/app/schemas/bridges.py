@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from app.domain.bridge_status import BridgeStatus
 
@@ -13,6 +13,8 @@ class BridgeCreateRequest(BaseModel):
 
 
 class BridgeResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
     subdomain: str
     public_url: str
@@ -30,6 +32,8 @@ class BridgeResponse(BaseModel):
 
 
 class BridgeEventResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
     bridge_id: str
     event_type: str
