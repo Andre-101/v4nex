@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Depends, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -7,11 +9,13 @@ from app.core.config import settings
 from app.core.errors import AppError, ErrorCode
 from app.db.session import get_db
 from app.domain.bridge_status import BridgeStatus
+from app.domain.state_machine import assert_valid_transition
 from app.domain.validators import validate_ipv6, validate_port, validate_subdomain
 from app.models.bridge import Bridge
 from app.models.bridge_event import BridgeEvent
 from app.models.user import User
 from app.schemas.bridges import BridgeCreateRequest, BridgeEventResponse, BridgeResponse
+from app.services.tcp_validator import TcpValidationResult, validate_tcp_connectivity
 
 
 router = APIRouter(prefix="/_v4nex/bridges", tags=["bridges"])
@@ -56,6 +60,38 @@ def get_owned_bridge(bridge_id: str, user: User, db: Session) -> Bridge:
             details={"bridge_id": bridge_id},
         )
     return bridge
+
+
+def add_bridge_event(
+    db: Session,
+    bridge: Bridge,
+    event_type: str,
+    message: str,
+    metadata: dict,
+) -> None:
+    db.add(
+        BridgeEvent(
+            bridge_id=bridge.id,
+            event_type=event_type,
+            message=message,
+            event_metadata=metadata,
+        )
+    )
+
+
+def validation_metadata(bridge: Bridge, result: TcpValidationResult | None = None) -> dict:
+    metadata = {
+        "target_ipv6": bridge.target_ipv6,
+        "target_port": bridge.target_port,
+    }
+    if result is not None:
+        metadata.update(
+            {
+                "error_code": result.error_code,
+                "latency_ms": result.latency_ms,
+            }
+        )
+    return metadata
 
 
 @router.get("", response_model=list[BridgeResponse])
@@ -135,3 +171,67 @@ def list_bridge_events(
         .order_by(BridgeEvent.created_at)
     ).all()
     return [event_to_response(event) for event in events]
+
+
+@router.post("/{bridge_id}/validate", response_model=BridgeResponse)
+def validate_bridge(
+    bridge_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> BridgeResponse:
+    bridge = get_owned_bridge(bridge_id, current_user, db)
+    current_status = BridgeStatus(bridge.status)
+
+    assert_valid_transition(current_status, BridgeStatus.VALIDATING)
+    bridge.status = BridgeStatus.VALIDATING.value
+    add_bridge_event(
+        db=db,
+        bridge=bridge,
+        event_type="TCP_VALIDATION_STARTED",
+        message="TCP validation started.",
+        metadata=validation_metadata(bridge),
+    )
+    db.commit()
+    db.refresh(bridge)
+
+    result = validate_tcp_connectivity(bridge.target_ipv6, bridge.target_port)
+    validated_at = datetime.now(UTC)
+
+    if result.ok:
+        assert_valid_transition(BridgeStatus.VALIDATING, BridgeStatus.READY)
+        bridge.status = BridgeStatus.READY.value
+        bridge.last_tcp_validation_at = validated_at
+        bridge.last_tcp_validation_result = "OK"
+        add_bridge_event(
+            db=db,
+            bridge=bridge,
+            event_type="TCP_VALIDATION_PASSED",
+            message=result.message,
+            metadata=validation_metadata(bridge, result),
+        )
+        db.commit()
+        db.refresh(bridge)
+        return bridge_to_response(bridge)
+
+    assert_valid_transition(BridgeStatus.VALIDATING, BridgeStatus.ERROR)
+    bridge.status = BridgeStatus.ERROR.value
+    bridge.last_tcp_validation_at = validated_at
+    bridge.last_tcp_validation_result = "FAILED"
+    add_bridge_event(
+        db=db,
+        bridge=bridge,
+        event_type="TCP_VALIDATION_FAILED",
+        message=result.message,
+        metadata=validation_metadata(bridge, result),
+    )
+    db.commit()
+
+    raise AppError(
+        code=ErrorCode.TCP_VALIDATION_FAILED,
+        message="TCP validation failed. v4nex could not reach the IPv6 service on port 80.",
+        details={
+            "error_code": result.error_code,
+            "message": result.message,
+            "latency_ms": result.latency_ms,
+        },
+    )

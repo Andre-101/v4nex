@@ -1,5 +1,10 @@
 from fastapi.testclient import TestClient
 
+from app.db.session import SessionLocal
+from app.domain.bridge_status import BridgeStatus
+from app.models.bridge import Bridge
+from app.services.tcp_validator import TcpValidationResult
+
 
 def register_and_login(client: TestClient, email: str) -> str:
     password = "strong-password"
@@ -154,3 +159,203 @@ def test_bridge_events_returns_bridge_created(client: TestClient) -> None:
     assert response.status_code == 200
     assert len(response.json()) == 1
     assert response.json()[0]["event_type"] == "BRIDGE_CREATED"
+
+
+def test_validate_without_token_fails_401(client: TestClient) -> None:
+    response = client.post("/_v4nex/bridges/some-id/validate")
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "UNAUTHORIZED"
+
+
+def test_validate_own_draft_bridge_tcp_ok_changes_to_ready(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    token = register_and_login(client, "user@example.com")
+    bridge_id = create_bridge(client, token).json()["id"]
+    monkeypatch.setattr(
+        "app.api.routes.bridges.validate_tcp_connectivity",
+        lambda host, port: TcpValidationResult(True, "TCP_OK", "ok", 12),
+    )
+
+    response = client.post(
+        f"/_v4nex/bridges/{bridge_id}/validate",
+        headers=auth_headers(token),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "READY"
+
+
+def test_validate_own_draft_bridge_tcp_fail_changes_to_error(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    token = register_and_login(client, "user@example.com")
+    bridge_id = create_bridge(client, token).json()["id"]
+    monkeypatch.setattr(
+        "app.api.routes.bridges.validate_tcp_connectivity",
+        lambda host, port: TcpValidationResult(False, "TCP_TIMEOUT", "timeout", 3000),
+    )
+
+    response = client.post(
+        f"/_v4nex/bridges/{bridge_id}/validate",
+        headers=auth_headers(token),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "TCP_VALIDATION_FAILED"
+
+    detail = client.get(f"/_v4nex/bridges/{bridge_id}", headers=auth_headers(token))
+    assert detail.json()["status"] == "ERROR"
+
+
+def test_validate_other_users_bridge_returns_not_found(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    first_token = register_and_login(client, "first@example.com")
+    second_token = register_and_login(client, "second@example.com")
+    bridge_id = create_bridge(client, first_token, subdomain="first").json()["id"]
+    monkeypatch.setattr(
+        "app.api.routes.bridges.validate_tcp_connectivity",
+        lambda host, port: TcpValidationResult(True, "TCP_OK", "ok", 12),
+    )
+
+    response = client.post(
+        f"/_v4nex/bridges/{bridge_id}/validate",
+        headers=auth_headers(second_token),
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "BRIDGE_NOT_FOUND"
+
+
+def test_validate_active_bridge_returns_invalid_state_transition(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    token = register_and_login(client, "user@example.com")
+    bridge_id = create_bridge(client, token).json()["id"]
+    monkeypatch.setattr(
+        "app.api.routes.bridges.validate_tcp_connectivity",
+        lambda host, port: TcpValidationResult(True, "TCP_OK", "ok", 12),
+    )
+    with SessionLocal() as db:
+        bridge = db.get(Bridge, bridge_id)
+        assert bridge is not None
+        bridge.status = BridgeStatus.ACTIVE.value
+        db.commit()
+
+    response = client.post(
+        f"/_v4nex/bridges/{bridge_id}/validate",
+        headers=auth_headers(token),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "INVALID_STATE_TRANSITION"
+
+
+def test_validate_creates_started_and_passed_events(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    token = register_and_login(client, "user@example.com")
+    bridge_id = create_bridge(client, token).json()["id"]
+    monkeypatch.setattr(
+        "app.api.routes.bridges.validate_tcp_connectivity",
+        lambda host, port: TcpValidationResult(True, "TCP_OK", "ok", 12),
+    )
+
+    assert (
+        client.post(f"/_v4nex/bridges/{bridge_id}/validate", headers=auth_headers(token)).status_code
+        == 200
+    )
+    events = client.get(f"/_v4nex/bridges/{bridge_id}/events", headers=auth_headers(token))
+    event_types = [event["event_type"] for event in events.json()]
+
+    assert "TCP_VALIDATION_STARTED" in event_types
+    assert "TCP_VALIDATION_PASSED" in event_types
+
+
+def test_validate_fail_creates_failed_event(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    token = register_and_login(client, "user@example.com")
+    bridge_id = create_bridge(client, token).json()["id"]
+    monkeypatch.setattr(
+        "app.api.routes.bridges.validate_tcp_connectivity",
+        lambda host, port: TcpValidationResult(False, "TCP_TIMEOUT", "timeout", 3000),
+    )
+
+    assert (
+        client.post(f"/_v4nex/bridges/{bridge_id}/validate", headers=auth_headers(token)).status_code
+        == 422
+    )
+    events = client.get(f"/_v4nex/bridges/{bridge_id}/events", headers=auth_headers(token))
+    event_types = [event["event_type"] for event in events.json()]
+
+    assert "TCP_VALIDATION_STARTED" in event_types
+    assert "TCP_VALIDATION_FAILED" in event_types
+
+
+def test_validate_ok_updates_last_tcp_validation_result(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    token = register_and_login(client, "user@example.com")
+    bridge_id = create_bridge(client, token).json()["id"]
+    monkeypatch.setattr(
+        "app.api.routes.bridges.validate_tcp_connectivity",
+        lambda host, port: TcpValidationResult(True, "TCP_OK", "ok", 12),
+    )
+
+    response = client.post(
+        f"/_v4nex/bridges/{bridge_id}/validate",
+        headers=auth_headers(token),
+    )
+
+    assert response.json()["last_tcp_validation_result"] == "OK"
+
+
+def test_validate_fail_updates_last_tcp_validation_result(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    token = register_and_login(client, "user@example.com")
+    bridge_id = create_bridge(client, token).json()["id"]
+    monkeypatch.setattr(
+        "app.api.routes.bridges.validate_tcp_connectivity",
+        lambda host, port: TcpValidationResult(False, "TCP_TIMEOUT", "timeout", 3000),
+    )
+
+    client.post(f"/_v4nex/bridges/{bridge_id}/validate", headers=auth_headers(token))
+    detail = client.get(f"/_v4nex/bridges/{bridge_id}", headers=auth_headers(token))
+
+    assert detail.json()["last_tcp_validation_result"] == "FAILED"
+
+
+def test_activate_endpoint_does_not_exist(client: TestClient) -> None:
+    token = register_and_login(client, "user@example.com")
+    bridge_id = create_bridge(client, token).json()["id"]
+
+    response = client.post(
+        f"/_v4nex/bridges/{bridge_id}/activate",
+        headers=auth_headers(token),
+    )
+
+    assert response.status_code == 404
+
+
+def test_disable_endpoint_does_not_exist(client: TestClient) -> None:
+    token = register_and_login(client, "user@example.com")
+    bridge_id = create_bridge(client, token).json()["id"]
+
+    response = client.post(
+        f"/_v4nex/bridges/{bridge_id}/disable",
+        headers=auth_headers(token),
+    )
+
+    assert response.status_code == 404
