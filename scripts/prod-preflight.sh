@@ -20,6 +20,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 COMPOSE_FILE="${REPO_ROOT}/docker-compose.prod.example.yml"
 
 bash "${SCRIPT_DIR}/check-prod-env.sh" "$ENV_FILE" "${ALLOW_PLACEHOLDERS_ARGS[@]}"
+bash "${SCRIPT_DIR}/check-caddy-prod-config.sh" "$ENV_FILE" "${ALLOW_PLACEHOLDERS_ARGS[@]}"
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "ERROR docker command is required."
@@ -41,7 +42,8 @@ echo "OK docker-compose.prod.example.yml present"
 
 postgres_password_line="$(grep -E '^POSTGRES_PASSWORD=' "$ENV_FILE" | tail -n 1 || true)"
 if [[ -n "$postgres_password_line" ]]; then
-  export POSTGRES_PASSWORD="${postgres_password_line#*=}"
+  postgres_password_value="${postgres_password_line#*=}"
+  export POSTGRES_PASSWORD="${postgres_password_value%$'\r'}"
 fi
 
 echo "Checking compose config without starting services..."

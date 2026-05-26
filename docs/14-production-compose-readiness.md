@@ -229,6 +229,7 @@ Runbook conceptual:
 
 - `docker-compose.prod.example.yml` no es definitivo.
 - Caddyfile productivo real pendiente.
+- Ver `docs/15-caddy-tls-dns-plan.md` para el draft Caddy productivo y plan TLS/DNS.
 - TLS real pendiente.
 - DNS wildcard real pendiente.
 - Secret manager real pendiente.
