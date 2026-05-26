@@ -96,6 +96,8 @@ Mapeo interno en compose:
 - `DOMAIN` -> `PUBLIC_DOMAIN`
 - `POSTGRES_*` -> `DATABASE_URL`
 
+`IMAGE_TAG` no es la interfaz productiva de este escenario. Las imagenes se versionan por separado con `CADDY_IMAGE_TAG`, `BACKEND_IMAGE_TAG` y `FRONTEND_IMAGE_TAG`.
+
 ## Volumenes persistentes
 
 - `postgres_data`: datos de Postgres.

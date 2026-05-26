@@ -49,14 +49,16 @@ has_errors="false"
 required_vars=(
   APP_ENV
   DOMAIN
-  IMAGE_TAG
+  CADDY_DOMAIN
+  CADDY_IMAGE_TAG
+  BACKEND_IMAGE_TAG
+  FRONTEND_IMAGE_TAG
   POSTGRES_DB
   POSTGRES_USER
   POSTGRES_PASSWORD
   JWT_SECRET
   CLOUDFLARE_API_TOKEN
   CADDY_ACME_EMAIL
-  CADDY_DOMAIN
   BACKEND_PORT
 )
 
@@ -100,16 +102,31 @@ else
   status_ok "CADDY_DOMAIN matches DOMAIN"
 fi
 
-image_tag="$(get_env_value IMAGE_TAG)"
-if [[ -z "$image_tag" || "$image_tag" == "latest" || "$image_tag" == "change-me" ]]; then
-  if placeholder_allowed && [[ "$image_tag" == "change-me" ]]; then
-    status_ok "IMAGE_TAG placeholder allowed"
+validate_image_tag() {
+  local name="$1"
+  local value
+  value="$(get_env_value "$name")"
+  if [[ -z "$value" || "$value" == "latest" || "$value" == "change-me" || "$value" =~ [[:space:]] ]]; then
+    if placeholder_allowed && [[ "$value" == "change-me" ]]; then
+      status_ok "$name placeholder allowed"
+    else
+      status_error "$name must be pinned and must not be latest/change-me/empty"
+      has_errors="true"
+    fi
   else
-    status_error "IMAGE_TAG must be pinned and must not be latest/change-me"
-    has_errors="true"
+    status_ok "$name pinned"
   fi
+}
+
+validate_image_tag CADDY_IMAGE_TAG
+validate_image_tag BACKEND_IMAGE_TAG
+validate_image_tag FRONTEND_IMAGE_TAG
+
+legacy_image_tag="$(get_env_value IMAGE_TAG)"
+if [[ -n "$legacy_image_tag" ]]; then
+  status_ok "IMAGE_TAG present but deprecated; use CADDY_IMAGE_TAG/BACKEND_IMAGE_TAG/FRONTEND_IMAGE_TAG"
 else
-  status_ok "IMAGE_TAG pinned"
+  status_ok "IMAGE_TAG not used"
 fi
 
 postgres_password="$(get_env_value POSTGRES_PASSWORD)"
