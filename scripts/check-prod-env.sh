@@ -41,27 +41,23 @@ status_error() {
   echo "ERROR $1"
 }
 
+placeholder_allowed() {
+  [[ "$ALLOW_PLACEHOLDERS" == "true" ]]
+}
+
 has_errors="false"
 required_vars=(
   APP_ENV
-  PUBLIC_DOMAIN
-  DATABASE_URL
+  DOMAIN
+  IMAGE_TAG
   POSTGRES_DB
   POSTGRES_USER
   POSTGRES_PASSWORD
-  JWT_SECRET_KEY
-  JWT_ALGORITHM
-  ACCESS_TOKEN_EXPIRE_MINUTES
-  CADDY_ADMIN_URL
-  CADDY_ADMIN_TIMEOUT_SECONDS
-  MAX_BRIDGES_PER_USER
-  RATE_LIMIT_ENABLED
-  RATE_LIMIT_WINDOW_SECONDS
-  RATE_LIMIT_MAX_REQUESTS
-  RATE_LIMIT_STRICT_MAX_REQUESTS
-  ACME_EMAIL
-  DNS_PROVIDER
-  DNS_PROVIDER_API_TOKEN
+  JWT_SECRET
+  CLOUDFLARE_API_TOKEN
+  CADDY_ACME_EMAIL
+  CADDY_DOMAIN
+  BACKEND_PORT
 )
 
 for name in "${required_vars[@]}"; do
@@ -82,41 +78,43 @@ else
   status_ok "APP_ENV production"
 fi
 
-rate_limit_enabled="$(get_env_value RATE_LIMIT_ENABLED)"
-if [[ "$rate_limit_enabled" != "true" ]]; then
-  status_error "RATE_LIMIT_ENABLED must be true"
+domain="$(get_env_value DOMAIN)"
+if [[ -z "$domain" || "$domain" == "example.com" ]]; then
+  status_error "DOMAIN must not be empty or example.com"
+  has_errors="true"
+elif [[ "$domain" != "v4nex.com" ]]; then
+  status_error "DOMAIN must be v4nex.com for this infrastructure baseline"
   has_errors="true"
 else
-  status_ok "RATE_LIMIT_ENABLED true"
+  status_ok "DOMAIN v4nex.com"
 fi
 
-public_domain="$(get_env_value PUBLIC_DOMAIN)"
-if [[ -z "$public_domain" || "$public_domain" == "example.com" ]]; then
-  if [[ "$ALLOW_PLACEHOLDERS" == "true" && "$public_domain" == "example.com" ]]; then
-    status_ok "PUBLIC_DOMAIN placeholder allowed"
+caddy_domain="$(get_env_value CADDY_DOMAIN)"
+if [[ -z "$caddy_domain" ]]; then
+  status_error "CADDY_DOMAIN must not be empty"
+  has_errors="true"
+elif [[ "$caddy_domain" != "$domain" ]]; then
+  status_error "CADDY_DOMAIN must match DOMAIN"
+  has_errors="true"
+else
+  status_ok "CADDY_DOMAIN matches DOMAIN"
+fi
+
+image_tag="$(get_env_value IMAGE_TAG)"
+if [[ -z "$image_tag" || "$image_tag" == "latest" || "$image_tag" == "change-me" ]]; then
+  if placeholder_allowed && [[ "$image_tag" == "change-me" ]]; then
+    status_ok "IMAGE_TAG placeholder allowed"
   else
-    status_error "PUBLIC_DOMAIN must not be empty or example.com"
+    status_error "IMAGE_TAG must be pinned and must not be latest/change-me"
     has_errors="true"
   fi
 else
-  status_ok "PUBLIC_DOMAIN non-placeholder"
-fi
-
-jwt_secret_key="$(get_env_value JWT_SECRET_KEY)"
-if [[ "$jwt_secret_key" == "dev-only-change-me" || "$jwt_secret_key" == "change-me" ]]; then
-  if [[ "$ALLOW_PLACEHOLDERS" == "true" && "$jwt_secret_key" == "change-me" ]]; then
-    status_ok "JWT_SECRET_KEY placeholder allowed"
-  else
-    status_error "JWT_SECRET_KEY must be replaced"
-    has_errors="true"
-  fi
-else
-  status_ok "JWT_SECRET_KEY replaced"
+  status_ok "IMAGE_TAG pinned"
 fi
 
 postgres_password="$(get_env_value POSTGRES_PASSWORD)"
 if [[ "$postgres_password" == "change-me" ]]; then
-  if [[ "$ALLOW_PLACEHOLDERS" == "true" ]]; then
+  if placeholder_allowed; then
     status_ok "POSTGRES_PASSWORD placeholder allowed"
   else
     status_error "POSTGRES_PASSWORD must be replaced"
@@ -126,16 +124,48 @@ else
   status_ok "POSTGRES_PASSWORD replaced"
 fi
 
-dns_token="$(get_env_value DNS_PROVIDER_API_TOKEN)"
-if [[ "$dns_token" == "change-me" ]]; then
-  if [[ "$ALLOW_PLACEHOLDERS" == "true" ]]; then
-    status_ok "DNS_PROVIDER_API_TOKEN placeholder allowed"
+jwt_secret="$(get_env_value JWT_SECRET)"
+if [[ "$jwt_secret" == "dev-only-change-me" || "$jwt_secret" == "change-me" ]]; then
+  if placeholder_allowed && [[ "$jwt_secret" == "change-me" ]]; then
+    status_ok "JWT_SECRET placeholder allowed"
   else
-    status_error "DNS_PROVIDER_API_TOKEN must be replaced"
+    status_error "JWT_SECRET must be replaced"
     has_errors="true"
   fi
 else
-  status_ok "DNS_PROVIDER_API_TOKEN replaced"
+  status_ok "JWT_SECRET replaced"
+fi
+
+cloudflare_token="$(get_env_value CLOUDFLARE_API_TOKEN)"
+if [[ "$cloudflare_token" == "change-me" ]]; then
+  if placeholder_allowed; then
+    status_ok "CLOUDFLARE_API_TOKEN placeholder allowed"
+  else
+    status_error "CLOUDFLARE_API_TOKEN must be replaced"
+    has_errors="true"
+  fi
+else
+  status_ok "CLOUDFLARE_API_TOKEN replaced"
+fi
+
+caddy_acme_email="$(get_env_value CADDY_ACME_EMAIL)"
+if [[ -z "$caddy_acme_email" || "$caddy_acme_email" == "admin@example.com" ]]; then
+  if placeholder_allowed && [[ "$caddy_acme_email" == "admin@example.com" ]]; then
+    status_ok "CADDY_ACME_EMAIL placeholder allowed"
+  else
+    status_error "CADDY_ACME_EMAIL must be replaced"
+    has_errors="true"
+  fi
+else
+  status_ok "CADDY_ACME_EMAIL replaced"
+fi
+
+backend_port="$(get_env_value BACKEND_PORT)"
+if [[ -z "$backend_port" ]]; then
+  status_error "BACKEND_PORT must not be empty"
+  has_errors="true"
+else
+  status_ok "BACKEND_PORT present"
 fi
 
 if [[ "$has_errors" == "true" ]]; then
