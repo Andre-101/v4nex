@@ -1,0 +1,53 @@
+services:
+  db:
+    image: postgres:16
+    container_name: v4nex-db
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-v4nex}
+      POSTGRES_USER: ${POSTGRES_USER:-v4nex}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-v4nex} -d ${POSTGRES_DB:-v4nex}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./apps/backend
+    container_name: v4nex-backend
+    environment:
+      ENV: ${ENV:-development}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://v4nex:devpassword@db:5432/v4nex}
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./apps/frontend
+    container_name: v4nex-frontend
+    ports:
+      - "${FRONTEND_PORT:-5173}:5173"
+    depends_on:
+      - backend
+
+  caddy:
+    image: caddy:2
+    container_name: v4nex-caddy
+    ports:
+      - "${CADDY_PORT:-8080}:8080"
+    volumes:
+      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      - frontend
+      - backend
+
+volumes:
+  postgres_data:
