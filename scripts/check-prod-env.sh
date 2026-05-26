@@ -29,7 +29,8 @@ get_env_value() {
     printf ''
     return
   fi
-  printf '%s' "${line#*=}"
+  value="${line#*=}"
+  printf '%s' "${value%$'\r'}"
 }
 
 status_ok() {
