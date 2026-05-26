@@ -42,13 +42,33 @@ if printf '%s\n' "$history" | grep -Eiq "$SECRET_HISTORY_PATTERN"; then
 fi
 echo "OK docker history has no blocked secret-like patterns"
 
-docker run --rm "$CADDY_LOCAL_TAG" caddy version
-modules="$(docker run --rm "$CADDY_LOCAL_TAG" caddy list-modules)"
+docker run --rm --entrypoint /usr/bin/caddy "$CADDY_LOCAL_TAG" version
+build_info="$(docker run --rm --entrypoint /usr/bin/caddy "$CADDY_LOCAL_TAG" build-info)"
+printf '%s\n' "$build_info"
+modules="$(docker run --rm --entrypoint /usr/bin/caddy "$CADDY_LOCAL_TAG" list-modules)"
 if ! printf '%s\n' "$modules" | grep -Fxq "$REQUIRED_MODULE"; then
   echo "ERROR required module not found: $REQUIRED_MODULE"
   exit 1
 fi
 
 echo "OK required module found: $REQUIRED_MODULE"
+
+if docker scout version >/dev/null 2>&1; then
+  scout_cves="$(docker scout cves "$CADDY_LOCAL_TAG" 2>/dev/null || true)"
+  if printf '%s\n' "$scout_cves" | grep -Eiq '(^|[[:space:]])(curl|busybox)[[:space:]]'; then
+    echo "ERROR Docker Scout still reports curl or busybox in the final image."
+    exit 1
+  fi
+  echo "OK Docker Scout did not report curl or busybox in the final image."
+else
+  echo "WARN Docker Scout not available; skipped curl package check."
+fi
+
+if docker run --rm --entrypoint /bin/sh "$CADDY_LOCAL_TAG" >/dev/null 2>&1; then
+  echo "ERROR /bin/sh unexpectedly exists in the final image."
+  exit 1
+fi
+echo "OK /bin/sh is not available; scratch runtime has no shell."
+
 echo "Caddy image hardening check passed."
 echo "No Cloudflare API call, TLS issuance, or service startup was performed."

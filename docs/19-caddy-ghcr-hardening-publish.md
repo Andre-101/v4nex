@@ -135,6 +135,8 @@ No-Go:
 
 ## Pendientes para Escenario 20
 
+Ver `docs/20-caddy-vulnerability-remediation.md` para el analisis y remediacion de CVEs antes de cualquier push final.
+
 - Decidir si se ejecuta push real.
 - Validar pull desde GHCR con tag fijo.
 - Verificar acceso GHCR desde VPS sin deploy.
