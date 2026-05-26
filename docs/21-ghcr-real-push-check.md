@@ -2,16 +2,26 @@
 
 ## Resumen ejecutivo
 
-Este escenario intento publicar de forma controlada la imagen Caddy custom en GHCR con tag fijo, despues de validar localmente que la imagen `scratch` estaba limpia en Docker Scout.
+Este escenario publico de forma controlada la imagen Caddy custom en GHCR con tag fijo, despues de validar localmente que la imagen `scratch` estaba limpia en Docker Scout.
 
-El push real no se completo porque GHCR respondio `denied`. No se pidio token, no se imprimio token y no se automatizo login. El operador debe ejecutar `docker login ghcr.io` manualmente con permisos adecuados y reintentar el flujo.
+La secuencia real fue:
+
+1. Validacion local OK.
+2. Tag GHCR local OK.
+3. Primer push fallo por `GHCR denied`.
+4. Se hizo `docker login ghcr.io` manual correctamente.
+5. Se reintento el push con confirmacion explicita.
+6. Push exitoso.
+7. Pull/check desde GHCR exitoso.
+8. Docker Scout sobre GHCR limpio: `0C 0H 0M 0L`.
 
 No se uso `latest`, no se emitio TLS, no se ejecuto ACME, no se llamo Cloudflare API, no se modifico DNS publico, no se ejecuto `docker compose up`, no hubo deploy y no se creo CI/CD.
 
-## Tag usado
+## Tag e imagen publicada
 
 - Tag fijo: `scenario-21-scratch-clean`
-- Imagen esperada: `ghcr.io/andre-101/v4nex-caddy-cloudflare:scenario-21-scratch-clean`
+- Imagen publicada: `ghcr.io/andre-101/v4nex-caddy-cloudflare:scenario-21-scratch-clean`
+- Digest: `sha256:5b5cad98d400e6f5ae44d45befbdf91dd00b53be429687a8e4ad086322498ed6`
 
 ## Validacion local antes del push
 
@@ -37,7 +47,7 @@ Resultados:
 
 ## Tag GHCR local
 
-Comando correcto ejecutado:
+Comando ejecutado:
 
 ```bash
 GHCR_TAG=scenario-21-scratch-clean bash scripts/tag-caddy-ghcr.sh
@@ -54,9 +64,7 @@ GHCR tag created locally.
 No push was performed.
 ```
 
-Nota: una invocacion previa desde PowerShell no propago `GHCR_TAG` y creo tambien el tag local default `scenario-18-check`. No hubo push de ese tag.
-
-## Push real controlado
+## Primer push fallido
 
 Comando ejecutado:
 
@@ -64,60 +72,83 @@ Comando ejecutado:
 CONFIRM_PUSH=I_UNDERSTAND_PUSH_GHCR GHCR_TAG=scenario-21-scratch-clean bash scripts/push-caddy-ghcr.sh
 ```
 
-Resultado:
+Resultado inicial:
 
 ```text
-Pushing Caddy image to GHCR
-  image: ghcr.io/andre-101/v4nex-caddy-cloudflare:scenario-21-scratch-clean
-  docker login: manual prerequisite
 ERROR docker push failed.
 If this is an auth error, run docker login ghcr.io manually and retry.
 error from registry: denied
 denied
 ```
 
-Conclusion: no hubo push exitoso. El estado queda bloqueado por autenticacion/permisos GHCR.
+No se pidio token, no se imprimio token y no se automatizo login.
 
-## Login manual
+## Login manual GHCR
 
-No se automatizo login y no se pidio token. Para reintentar, el operador debe autenticarse manualmente fuera del repo:
+El operador ejecuto manualmente:
 
 ```bash
 docker login ghcr.io
 ```
 
-El token debe tener permisos adecuados para publicar en `ghcr.io/andre-101/v4nex-caddy-cloudflare` y no debe guardarse en el repositorio.
+El login fue exitoso fuera del flujo automatizado. No se guardaron secrets en el repositorio.
 
+## Push exitoso
 
-Debe validar:
+Despues del login manual, se reintento:
 
-- `docker pull`
-- `caddy version`
-- `caddy list-modules`
-- presencia de `dns.providers.cloudflare`
+```bash
+CONFIRM_PUSH=I_UNDERSTAND_PUSH_GHCR GHCR_TAG=scenario-21-scratch-clean bash scripts/push-caddy-ghcr.sh
+```
 
-Resultado esperado:
-
-- `0C 0H 0M 0L`
-- `No vulnerable packages detected`
-
-## Resultado final del push GHCR
-
-La imagen fue publicada correctamente en GHCR con tag fijo:
+Resultado final: push exitoso de la imagen:
 
 ```text
 ghcr.io/andre-101/v4nex-caddy-cloudflare:scenario-21-scratch-clean
 ```
 
+Digest publicado:
+
+```text
+sha256:5b5cad98d400e6f5ae44d45befbdf91dd00b53be429687a8e4ad086322498ed6
+```
+
+## Pull/check desde GHCR
+
+Pull/check desde GHCR fue exitoso.
+
+Validaciones confirmadas:
+
+- `docker pull` exitoso.
+- `caddy version`: `v2.11.3 h1:/vFbdjcs2DtzcWTIxHybf5R5TspYFFThlZffChyBFHg=`
+- `caddy list-modules`: incluye `dns.providers.cloudflare`
+- No se llamo Cloudflare API.
+- No se emitio TLS.
+- No se levantaron servicios.
+
+## Docker Scout sobre GHCR
+
+Docker Scout sobre la imagen publicada reporto:
+
+```text
+0C 0H 0M 0L
+No vulnerable packages detected
+Size: 18 MB
+Packages: 195
+```
+
 ## Decision Go/No-Go
 
-GO tecnico local para publicar: la imagen local esta limpia y validada.
+**GO tecnico** para usar esta imagen en el siguiente escenario de validacion pull desde VPS, sin levantar servicios.
 
+Esta decision no autoriza deploy, TLS, ACME, Cloudflare API, DNS publico ni `docker compose up`.
 
 ## Pendientes para Escenario 22
 
-- Ejecutar `docker login ghcr.io` manual con permisos correctos.
-- Reintentar push con `CONFIRM_PUSH=I_UNDERSTAND_PUSH_GHCR` y tag fijo.
-- Ejecutar pull/check desde GHCR.
-- Ejecutar Docker Scout sobre la imagen GHCR publicada.
-- Actualizar compose productivo example solo despues de confirmar pull/check exitoso desde GHCR.
+- Validar `docker pull` desde VPS.
+- Validar `caddy version` desde VPS.
+- Validar `caddy list-modules` desde VPS.
+- Confirmar `dns.providers.cloudflare` desde VPS.
+- Ejecutar Docker Scout desde VPS si esta disponible.
+- No ejecutar `docker compose up`.
+- No hacer deploy.
