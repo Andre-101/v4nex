@@ -145,6 +145,8 @@ Esta decision no autoriza deploy, TLS, ACME, Cloudflare API, DNS publico ni `doc
 
 ## Pendientes para Escenario 22
 
+Ver `docs/22-vps-ghcr-pull-check.md` para la validacion de pull desde VPS.
+
 - Validar `docker pull` desde VPS.
 - Validar `caddy version` desde VPS.
 - Validar `caddy list-modules` desde VPS.
