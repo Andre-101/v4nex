@@ -16,6 +16,14 @@ services:
       timeout: 5s
       retries: 5
 
+  demo-ipv6:
+    image: python:3.11-alpine
+    container_name: v4nex-demo-ipv6
+    command: "python -m http.server 80 --bind ::"
+    networks:
+      default:
+        ipv6_address: "${DEMO_IPV6:-fd00:4:6::80}"
+
   backend:
     build:
       context: ./apps/backend
@@ -56,3 +64,10 @@ services:
 
 volumes:
   postgres_data:
+
+networks:
+  default:
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: ${V4NEX_DEV_IPV6_SUBNET:-fd00:4:6::/64}
