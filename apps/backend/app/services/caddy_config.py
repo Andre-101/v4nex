@@ -22,6 +22,7 @@ def build_caddy_config(routes: list[CaddyBridgeRoute]) -> dict[str, Any]:
                 "servers": {
                     "srv0": {
                         "listen": [":8080"],
+                        "automatic_https": {"disable": True},
                         "routes": [
                             *[_bridge_route(route) for route in routes],
                             _backend_route(),

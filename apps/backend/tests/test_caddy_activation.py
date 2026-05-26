@@ -88,3 +88,9 @@ def test_caddy_config_preserves_admin_api() -> None:
     config = build_caddy_config([route()])
 
     assert config["admin"]["listen"] == "0.0.0.0:2019"
+
+
+def test_caddy_config_disables_automatic_https_for_dev() -> None:
+    config = build_caddy_config([route()])
+
+    assert config["apps"]["http"]["servers"]["srv0"]["automatic_https"] == {"disable": True}
