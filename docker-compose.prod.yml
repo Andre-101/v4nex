@@ -1,0 +1,118 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    env_file:
+      - path: .env.production
+        required: false
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - control
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    image: ghcr.io/andre-101/v4nex-backend:${BACKEND_IMAGE_TAG:?BACKEND_IMAGE_TAG is required}
+    restart: unless-stopped
+    env_file:
+      - path: .env.production
+        required: false
+    environment:
+      APP_ENV: ${APP_ENV:?APP_ENV is required}
+      PUBLIC_DOMAIN: ${DOMAIN:?DOMAIN is required}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/${POSTGRES_DB:?POSTGRES_DB is required}
+      JWT_SECRET_KEY: ${JWT_SECRET:?JWT_SECRET is required}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-60}
+      CADDY_ADMIN_URL: http://caddy:2019
+      CADDY_ADMIN_TIMEOUT_SECONDS: ${CADDY_ADMIN_TIMEOUT_SECONDS:-3}
+      MAX_BRIDGES_PER_USER: ${MAX_BRIDGES_PER_USER:-5}
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+      RATE_LIMIT_WINDOW_SECONDS: ${RATE_LIMIT_WINDOW_SECONDS:-60}
+      RATE_LIMIT_MAX_REQUESTS: ${RATE_LIMIT_MAX_REQUESTS:-30}
+      RATE_LIMIT_STRICT_MAX_REQUESTS: ${RATE_LIMIT_STRICT_MAX_REQUESTS:-10}
+    expose:
+      - "8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - edge
+      - control
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  frontend:
+    image: ghcr.io/andre-101/v4nex-frontend:${FRONTEND_IMAGE_TAG:?FRONTEND_IMAGE_TAG is required}
+    restart: unless-stopped
+    expose:
+      - "80"
+    depends_on:
+      - backend
+    networks:
+      - edge
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  caddy:
+    image: ghcr.io/andre-101/v4nex-caddy-cloudflare:${CADDY_IMAGE_TAG:?CADDY_IMAGE_TAG is required}
+    restart: unless-stopped
+    env_file:
+      - path: .env.production
+        required: false
+    environment:
+      DOMAIN: ${DOMAIN:?DOMAIN is required}
+      CADDY_DOMAIN: ${CADDY_DOMAIN:?CADDY_DOMAIN is required}
+      CADDY_ACME_EMAIL: ${CADDY_ACME_EMAIL:?CADDY_ACME_EMAIL is required}
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:?CLOUDFLARE_API_TOKEN is required}
+      BACKEND_PORT: ${BACKEND_PORT:?BACKEND_PORT is required}
+    ports:
+      - "80:80"
+      - "443:443"
+    expose:
+      - "2019"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+      - ./infra/caddy/Caddyfile.prod.example:/etc/caddy/Caddyfile:ro
+    depends_on:
+      - backend
+      - frontend
+    networks:
+      - edge
+      - control
+    healthcheck:
+      test: ["CMD", "/usr/bin/caddy", "validate", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  edge:
+  control:
+    internal: true
