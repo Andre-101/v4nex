@@ -76,6 +76,15 @@ def test_diagnostics_requires_auth(client: TestClient) -> None:
     assert response.json()["error"]["code"] == "UNAUTHORIZED"
 
 
+def test_no_public_admin_bootstrap_endpoint_exists(client: TestClient) -> None:
+    response = client.post(
+        "/_v4nex/admin/bootstrap-admin",
+        json={"email": "admin@example.com", "password": "strong-password"},
+    )
+
+    assert response.status_code == 404
+
+
 def test_reconcile_rejects_user_token(client: TestClient) -> None:
     token = register_and_login(client)
 
