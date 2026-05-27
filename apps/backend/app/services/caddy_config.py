@@ -84,7 +84,7 @@ def inject_bridge_routes(
         if not is_v4nex_dynamic_bridge_route(route, public_domain)
     ]
     bridge_routes = [build_bridge_route(route) for route in routes]
-    insert_at = _frontend_catch_all_index(preserved_routes)
+    insert_at = _bridge_route_insert_index(preserved_routes, public_domain)
 
     server["routes"] = [
         *preserved_routes[:insert_at],
@@ -124,11 +124,65 @@ def _find_public_http_server(config: dict[str, Any], public_domain: str) -> dict
     return candidates[0]
 
 
-def _frontend_catch_all_index(routes: list[dict[str, Any]]) -> int:
+def _bridge_route_insert_index(routes: list[dict[str, Any]], public_domain: str) -> int:
     for index, route in enumerate(routes):
-        if "match" not in route and _route_has_reverse_proxy(route):
+        if _route_can_capture_bridge_host(route, public_domain):
             return index
     return len(routes)
+
+
+def _route_can_capture_bridge_host(route: dict[str, Any], public_domain: str) -> bool:
+    if _route_matches_protected_paths(route):
+        return False
+    if not _route_proxies_to_frontend(route):
+        return False
+
+    hosts = _route_hosts(route)
+    if not hosts:
+        return True
+
+    return any(_host_can_capture_bridge_host(host, public_domain) for host in hosts)
+
+
+def _route_proxies_to_frontend(route: dict[str, Any]) -> bool:
+    return any(_handler_proxies_to_frontend(handler) for handler in route.get("handle", []))
+
+
+def _handler_proxies_to_frontend(handler: dict[str, Any]) -> bool:
+    if not isinstance(handler, dict):
+        return False
+
+    if handler.get("handler") == "reverse_proxy":
+        upstreams = handler.get("upstreams", [])
+        if not isinstance(upstreams, list):
+            return False
+        return any(
+            _dial_points_to_frontend(upstream.get("dial"))
+            for upstream in upstreams
+            if isinstance(upstream, dict)
+        )
+
+    subroutes = handler.get("routes", [])
+    if isinstance(subroutes, list):
+        return any(_route_proxies_to_frontend(route) for route in subroutes if isinstance(route, dict))
+
+    return False
+
+
+def _dial_points_to_frontend(dial: str | None) -> bool:
+    return isinstance(dial, str) and (dial == "frontend" or dial.startswith("frontend:"))
+
+
+def _host_can_capture_bridge_host(host: str, public_domain: str) -> bool:
+    if host == public_domain:
+        return False
+    if host == "*":
+        return True
+    if host == f"*.{public_domain}":
+        return True
+    if host.startswith("*.") and public_domain.endswith(host[2:]):
+        return True
+    return host.endswith(f".{public_domain}")
 
 
 def _route_hosts(route: dict[str, Any]) -> list[str]:
