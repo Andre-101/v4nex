@@ -103,6 +103,9 @@ function App() {
   const [targetPort, setTargetPort] = useState(80)
   const [createMessage, setCreateMessage] = useState("")
   const [createError, setCreateError] = useState("")
+  const [actionMessage, setActionMessage] = useState("")
+  const [actionError, setActionError] = useState("")
+  const [runningActionId, setRunningActionId] = useState("")
 
   const isAuthenticated = Boolean(token)
 
@@ -200,6 +203,8 @@ function App() {
     setBridgesError("")
     setCreateMessage("")
     setCreateError("")
+    setActionMessage("")
+    setActionError("")
   }
 
   async function submitBridge(event: FormEvent<HTMLFormElement>) {
@@ -257,6 +262,53 @@ function App() {
           ? `No pudimos crear el bridge.${error.message.includes("Puertos permitidos") ? error.message : ""}`
           : "No pudimos crear el bridge.",
       )
+    }
+  }
+
+  async function runBridgeAction(bridge: Bridge, action: "validate" | "activate") {
+    setActionError("")
+    setActionMessage("")
+    setRunningActionId(`${bridge.id}:${action}`)
+
+    if (isPreview) {
+      setBridges((current) =>
+        current.map((currentBridge) => {
+          if (currentBridge.id !== bridge.id) return currentBridge
+          if (action === "validate") {
+            return {
+              ...currentBridge,
+              status: "READY",
+              last_tcp_validation_result: "OK",
+            }
+          }
+          return {
+            ...currentBridge,
+            status: "ACTIVE",
+          }
+        }),
+      )
+      setActionMessage(action === "validate" ? "Bridge validado localmente." : "Bridge activado localmente.")
+      setRunningActionId("")
+      return
+    }
+
+    try {
+      await parseResponse<Bridge>(
+        await fetch(`${endpoints.bridges}/${bridge.id}/${action}`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+      )
+      setActionMessage(action === "validate" ? "Bridge validado." : "Bridge activado.")
+      await loadBridges()
+    } catch (error) {
+      if (isNetworkError(error)) {
+        setActionError(networkErrorMessage())
+        return
+      }
+      setActionError(error instanceof Error ? error.message : "No pudimos completar la accion.")
+    } finally {
+      setRunningActionId("")
     }
   }
 
@@ -374,6 +426,8 @@ function App() {
         </div>
 
         {bridgesError && <p className="error">{bridgesError}</p>}
+        {actionMessage && <p className="success">{actionMessage}</p>}
+        {actionError && <p className="error">{actionError}</p>}
 
         {bridges.length === 0 ? (
           <p className="muted">Aun no tienes bridges configurados.</p>
@@ -388,17 +442,50 @@ function App() {
                   <th>Puerto</th>
                   <th>Estado</th>
                   <th>Validacion TCP</th>
+                  <th>Acciones</th>
                 </tr>
               </thead>
               <tbody>
                 {bridges.map((bridge) => (
                   <tr key={bridge.id}>
                     <td>{bridge.subdomain}</td>
-                    <td>{bridge.public_url}</td>
+                    <td>
+                      {bridge.status === "ACTIVE" ? (
+                        <a href={bridge.public_url} target="_blank" rel="noreferrer">
+                          {bridge.public_url}
+                        </a>
+                      ) : (
+                        bridge.public_url
+                      )}
+                    </td>
                     <td>{bridge.target_ipv6}</td>
                     <td>{bridge.target_port}</td>
                     <td>{bridge.status}</td>
                     <td>{bridge.last_tcp_validation_result ?? "-"}</td>
+                    <td>
+                      {bridge.status === "DRAFT" && (
+                        <button
+                          className="secondary"
+                          type="button"
+                          disabled={runningActionId === `${bridge.id}:validate`}
+                          onClick={() => void runBridgeAction(bridge, "validate")}
+                        >
+                          Validar
+                        </button>
+                      )}
+                      {bridge.status === "READY" && (
+                        <button
+                          className="secondary"
+                          type="button"
+                          disabled={runningActionId === `${bridge.id}:activate`}
+                          onClick={() => void runBridgeAction(bridge, "activate")}
+                        >
+                          Activar
+                        </button>
+                      )}
+                      {bridge.status === "ACTIVE" && <span className="success inline">Activo</span>}
+                      {bridge.status === "ERROR" && <span className="error inline">Revisar error</span>}
+                    </td>
                   </tr>
                 ))}
               </tbody>

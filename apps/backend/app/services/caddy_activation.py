@@ -2,11 +2,16 @@ from dataclasses import dataclass
 import threading
 
 from app.services.caddy_client import CaddyAdminClient, CaddyClientError
-from app.services.caddy_config import CaddyBridgeRoute, build_caddy_config
+from app.services.caddy_config import (
+    CaddyBridgeRoute,
+    CaddyConfigShapeError,
+    inject_bridge_routes,
+)
 
 
 CADDY_OK = "CADDY_OK"
 CADDY_ADMIN_UNREACHABLE = "CADDY_ADMIN_UNREACHABLE"
+CADDY_CONFIG_SHAPE_UNSUPPORTED = "CADDY_CONFIG_SHAPE_UNSUPPORTED"
 CADDY_CONFIG_REJECTED = "CADDY_CONFIG_REJECTED"
 CADDY_ROLLBACK_FAILED = "CADDY_ROLLBACK_FAILED"
 CADDY_UNKNOWN_ERROR = "CADDY_UNKNOWN_ERROR"
@@ -63,7 +68,26 @@ def _apply_bridge_routes_unlocked(
         )
 
     try:
-        caddy_client.load_config(build_caddy_config(routes))
+        next_config = inject_bridge_routes(previous_config, routes)
+    except CaddyConfigShapeError as exc:
+        return CaddyActivationResult(
+            ok=False,
+            error_code=CADDY_CONFIG_SHAPE_UNSUPPORTED,
+            message=str(exc) or "Caddy config shape is not supported for safe dynamic injection.",
+            rollback_attempted=False,
+            rollback_ok=None,
+        )
+    except Exception as exc:
+        return CaddyActivationResult(
+            ok=False,
+            error_code=CADDY_UNKNOWN_ERROR,
+            message=str(exc) or "Unexpected Caddy config injection error.",
+            rollback_attempted=False,
+            rollback_ok=None,
+        )
+
+    try:
+        caddy_client.load_config(next_config)
     except CaddyClientError as exc:
         rollback_ok = _attempt_rollback(caddy_client, previous_config)
         return CaddyActivationResult(
