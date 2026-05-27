@@ -130,6 +130,14 @@ button.secondary {
   color: #e5e7eb;
 }
 
+a {
+  color: #22d3ee;
+}
+
+.inline {
+  margin: 0;
+}
+
 form {
   display: grid;
   gap: 14px;
