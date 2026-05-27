@@ -69,6 +69,51 @@ def product_config() -> dict:
     }
 
 
+def product_config_with_wildcard_frontend() -> dict:
+    config = product_config()
+    route_items = routes(config)
+    route_items.insert(
+        2,
+        {
+            "match": [{"host": ["*.v4nex.com"]}],
+            "handle": [
+                {
+                    "handler": "reverse_proxy",
+                    "upstreams": [{"dial": "frontend:80"}],
+                }
+            ],
+        },
+    )
+    return config
+
+
+def product_config_with_subroute_wildcard_frontend() -> dict:
+    config = product_config()
+    route_items = routes(config)
+    route_items.insert(
+        2,
+        {
+            "match": [{"host": ["*.v4nex.com"]}],
+            "handle": [
+                {
+                    "handler": "subroute",
+                    "routes": [
+                        {
+                            "handle": [
+                                {
+                                    "handler": "reverse_proxy",
+                                    "upstreams": [{"dial": "frontend:80"}],
+                                }
+                            ]
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+    return config
+
+
 class FakeCaddyClient:
     def __init__(
         self,
@@ -103,6 +148,18 @@ def route(subdomain: str = "demo", port: int = 80) -> CaddyBridgeRoute:
 
 def routes(config: dict) -> list[dict]:
     return config["apps"]["http"]["servers"]["public"]["routes"]
+
+
+def route_index_for_host(route_items: list[dict], host: str) -> int:
+    return next(
+        index
+        for index, route_item in enumerate(route_items)
+        if host in route_item.get("match", [{}])[0].get("host", [])
+    )
+
+
+def catch_all_index(route_items: list[dict]) -> int:
+    return next(index for index, route_item in enumerate(route_items) if "match" not in route_item)
 
 
 def test_build_bridge_route_rejects_malicious_subdomain() -> None:
@@ -174,9 +231,32 @@ def test_inject_bridge_routes_inserts_bridge_before_frontend_catch_all() -> None
     bridge_index = next(
         index for index, route_item in enumerate(route_items) if is_v4nex_dynamic_bridge_route(route_item, "v4nex.com")
     )
-    catch_all_index = next(index for index, route_item in enumerate(route_items) if "match" not in route_item)
 
-    assert bridge_index < catch_all_index
+    assert bridge_index < catch_all_index(route_items)
+
+
+def test_inject_bridge_routes_inserts_bridge_before_wildcard_frontend_fallback() -> None:
+    config = inject_bridge_routes(product_config_with_wildcard_frontend(), [route()])
+    route_items = routes(config)
+
+    assert route_index_for_host(route_items, "demo.v4nex.com") < route_index_for_host(route_items, "*.v4nex.com")
+
+
+def test_inject_bridge_routes_inserts_bridge_before_subroute_wildcard_frontend_fallback() -> None:
+    config = inject_bridge_routes(product_config_with_subroute_wildcard_frontend(), [route()])
+    route_items = routes(config)
+
+    assert route_index_for_host(route_items, "demo.v4nex.com") < route_index_for_host(route_items, "*.v4nex.com")
+
+
+def test_inject_bridge_routes_preserves_required_order_before_wildcard_and_catch_all() -> None:
+    config = inject_bridge_routes(product_config_with_wildcard_frontend(), [route()])
+    route_items = routes(config)
+
+    assert route_index_for_host(route_items, "v4nex.com") == 0
+    assert route_index_for_host(route_items, "demo.v4nex.com") == 2
+    assert route_index_for_host(route_items, "*.v4nex.com") == 3
+    assert catch_all_index(route_items) == 4
 
 
 def test_inject_bridge_routes_replaces_previous_dynamic_routes_without_duplicates() -> None:
