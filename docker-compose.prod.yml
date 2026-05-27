@@ -113,6 +113,17 @@ volumes:
   caddy_config:
 
 networks:
-  edge:
   control:
-    internal: true
+    driver: bridge
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: 172.18.0.0/16
+        - subnet: fd42:4e58:1501::/64
+  edge:
+    driver: bridge
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: 172.19.0.0/16
+        - subnet: fd42:4e58:1502::/64
