@@ -291,3 +291,13 @@ Antes y despues de `activate`:
 - No `down -v`.
 - No publicar `2019/5432/8000/5173`.
 - No tocar Caddyfile base salvo autorizacion explicita.
+
+### Supuesto de identificación de rutas dinámicas
+
+La limpieza de rutas dinámicas asume el contrato actual del producto:
+
+- La plataforma vive en `v4nex.com`.
+- Los bridges de clientes viven bajo `*.v4nex.com`.
+- Una ruta dinámica de bridge se identifica por host subdominio de `v4nex.com` y upstream IPv6 bracketed, por ejemplo `[IPv6]:80`.
+
+Este supuesto es válido para el MVP. Si en el futuro la plataforma usa subdominios propios como `status.v4nex.com`, `api.v4nex.com` o `panel.v4nex.com` con upstream IPv6, se debe cambiar la detección por un marcador explícito de ownership o una lista de subdominios reservados.
