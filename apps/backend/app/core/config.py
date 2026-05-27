@@ -19,9 +19,19 @@ class Settings(BaseModel):
     rate_limit_window_seconds: int = 60
     rate_limit_max_requests: int = 30
     rate_limit_strict_max_requests: int = 10
+    allowed_target_ports: tuple[int, ...] = (80, 8080)
 
 
 def get_settings() -> Settings:
+    allowed_target_ports = tuple(
+        int(port.strip())
+        for port in os.getenv(
+            "ALLOWED_TARGET_PORTS",
+            ",".join(str(port) for port in Settings.model_fields["allowed_target_ports"].default),
+        ).split(",")
+        if port.strip()
+    )
+
     return Settings(
         app_env=os.getenv("APP_ENV", os.getenv("ENV", Settings.model_fields["app_env"].default)),
         public_domain=os.getenv(
@@ -76,6 +86,7 @@ def get_settings() -> Settings:
                 str(Settings.model_fields["rate_limit_strict_max_requests"].default),
             )
         ),
+        allowed_target_ports=allowed_target_ports,
     )
 
 

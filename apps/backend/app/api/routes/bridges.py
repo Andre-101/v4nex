@@ -301,11 +301,12 @@ def validate_bridge(
 
     raise AppError(
         code=ErrorCode.TCP_VALIDATION_FAILED,
-        message="TCP validation failed. v4nex could not reach the IPv6 service on port 80.",
+        message="TCP validation failed. v4nex could not reach the IPv6 service on the configured port.",
         details={
             "error_code": result.error_code,
             "message": result.message,
             "latency_ms": result.latency_ms,
+            "target_port": bridge.target_port,
         },
     )
 
