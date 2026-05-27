@@ -41,6 +41,17 @@ def build_caddy_config(routes: list[CaddyBridgeRoute]) -> dict[str, Any]:
 
 
 def is_v4nex_dynamic_bridge_route(route: dict[str, Any], public_domain: str) -> bool:
+# Current MVP ownership rule:
+# Dynamic bridge routes are identified as customer-managed routes when they:
+# - match a host under *.{public_domain},
+# - are not the apex/base platform domain,
+# - reverse proxy to a bracketed IPv6 upstream like [IPv6]:port.
+#
+# This is safe for the current product boundary because platform routes live on
+# the apex domain and customer bridges live under the wildcard. If v4nex later
+# introduces platform subdomains such as status.v4nex.com or api.v4nex.com with
+# IPv6 upstreams, this detection must be replaced with an explicit ownership
+# marker or a reserved-subdomain exclusion list before activation is enabled.
     if _route_matches_protected_paths(route):
         return False
 
