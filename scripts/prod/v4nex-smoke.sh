@@ -61,15 +61,9 @@ with urllib.request.urlopen(url, timeout=15) as resp:
     print("backend_http_status=", resp.status)
 PY
 
-  if [ -z "${V4NEX_EMAIL:-}" ]; then
-    read -r -p "v4nex email: " V4NEX_EMAIL
-    export V4NEX_EMAIL
-  fi
-  if [ -z "${V4NEX_PASSWORD:-}" ]; then
-    read -r -s -p "v4nex password: " V4NEX_PASSWORD
-    echo
-    export V4NEX_PASSWORD
-  fi
+  [ -n "${V4NEX_EMAIL:-}" ] || fail "V4NEX_EMAIL is required for extended smoke"
+  [ -n "${V4NEX_PASSWORD:-}" ] || fail "V4NEX_PASSWORD is required for extended smoke"
+  export V4NEX_EMAIL V4NEX_PASSWORD
 
   export V4NEX_RESULT_JSON="$RESULT_JSON"
   export V4NEX_TEST_NAME="$name"
