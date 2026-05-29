@@ -7,6 +7,11 @@ on:
         description: "Type RUN_PROD_SMOKE_MINIMAL to execute production smoke minimal"
         required: true
         type: string
+      release_manifest:
+        description: "Release manifest path, for example releases/v0.1.1.json"
+        required: true
+        default: "releases/v0.1.1.json"
+        type: string
 
 permissions:
   contents: read
@@ -23,6 +28,7 @@ jobs:
     timeout-minutes: 20
     env:
       EXPECTED_CONFIRMATION: RUN_PROD_SMOKE_MINIMAL
+      RELEASE_MANIFEST: ${{ inputs.release_manifest }}
       PROD_SSH_HOST: ${{ vars.PROD_SSH_HOST }}
       PROD_SSH_USER: ${{ vars.PROD_SSH_USER }}
       PROD_SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
@@ -38,13 +44,30 @@ jobs:
             exit 1
           fi
 
+      - name: Validate release manifest input
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [ -z "${RELEASE_MANIFEST:-}" ]; then
+            echo "release_manifest is required"
+            exit 1
+          fi
+          case "$RELEASE_MANIFEST" in
+            releases/*.json) ;;
+            *) echo "release_manifest must start with releases/ and end with .json"; exit 1 ;;
+          esac
+          case "$RELEASE_MANIFEST" in
+            *..*|/*) echo "release_manifest must not contain path traversal or be absolute"; exit 1 ;;
+          esac
+          echo "RELEASE_MANIFEST=$RELEASE_MANIFEST" >> "$GITHUB_ENV"
+
       - name: Validate required configuration
         shell: bash
         run: |
           missing=0
           for name in PROD_SSH_HOST PROD_SSH_USER PROD_SSH_PRIVATE_KEY PROD_APP_PATH; do
             if [ -z "${!name:-}" ]; then
-              echo "Missing required secret: $name"
+              echo "Missing required configuration: $name"
               missing=1
             fi
           done
@@ -72,13 +95,14 @@ jobs:
         run: |
           set -Eeuo pipefail
           remote_app_path="$(printf '%q' "$PROD_APP_PATH")"
+          remote_manifest="$(printf '%q' "$RELEASE_MANIFEST")"
           ssh -i "$RUNNER_TEMP/v4nex-ssh/prod_key" \
             -p "$PROD_SSH_PORT" \
             -o BatchMode=yes \
             -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes \
             "$PROD_SSH_USER@$PROD_SSH_HOST" \
-            "cd $remote_app_path && $REMOTE_COMMAND"
+            "cd $remote_app_path && MANIFEST=$remote_manifest $REMOTE_COMMAND"
 
       - name: Write job summary
         if: always()
@@ -87,7 +111,8 @@ jobs:
           {
             echo "## v4nex production smoke minimal"
             echo "- Workflow: prod-smoke-minimal"
-            echo "- Remote command: scripts/prod/v4nex-smoke.sh minimal"
+            echo "- Release manifest: $RELEASE_MANIFEST"
+            echo "- Remote command: MANIFEST=$RELEASE_MANIFEST scripts/prod/v4nex-smoke.sh minimal"
             echo "- Environment: production"
             echo "- Trigger: workflow_dispatch"
             echo "- Smoke extended: no"
