@@ -1,0 +1,57 @@
+name: prod-audit-state
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type RUN_PROD_AUDIT_STATE to execute production audit-state"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prod-audit-state
+  cancel-in-progress: false
+
+jobs:
+  audit-state:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 20
+    steps:
+      - name: Validate confirmation
+        run: test "${{ inputs.confirm }}" = "RUN_PROD_AUDIT_STATE"
+
+      - name: Validate required secrets
+        env:
+          PROD_SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          PROD_SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          PROD_SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          PROD_APP_PATH: ${{ secrets.PROD_APP_PATH }}
+        run: |
+          test -n "$PROD_SSH_HOST"
+          test -n "$PROD_SSH_USER"
+          test -n "$PROD_SSH_PRIVATE_KEY"
+          test -n "$PROD_APP_PATH"
+
+      - name: Execute audit-state over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.PROD_SSH_HOST }}
+          username: ${{ secrets.PROD_SSH_USER }}
+          key: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          port: ${{ secrets.PROD_SSH_PORT || 22 }}
+          script_stop: true
+          command_timeout: 20m
+          script: |
+            set -Eeuo pipefail
+            cd "${{ secrets.PROD_APP_PATH }}"
+            scripts/prod/v4nex-audit-state.sh
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## prod audit-state" >> "$GITHUB_STEP_SUMMARY"
+          echo "Readonly audit workflow. No deploy or rollback is authorized." >> "$GITHUB_STEP_SUMMARY"
