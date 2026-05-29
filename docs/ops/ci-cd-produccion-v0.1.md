@@ -10,6 +10,7 @@ La estrategia es:
 - CD semiautomático para Producción.
 - Workflows manuales con `workflow_dispatch`.
 - GitHub Environment `production` con aprobaciones.
+- Selector explícito de release manifest.
 - Sin deploy real en esta iteración.
 - Sin ejecución automática por `push`, `pull_request` o `merge`.
 
@@ -33,15 +34,47 @@ Infra no necesita conocer la lógica interna de backend o frontend. Infra consum
 
 No existe workflow de deploy real en esta iteración.
 
+## Selector de release manifest
+
+Cada workflow productivo manual recibe el input obligatorio `release_manifest`.
+
+Valor por defecto:
+
+```text
+releases/v0.1.1.json
+```
+
+Reglas de seguridad del input:
+
+- Debe empezar por `releases/`.
+- Debe terminar en `.json`.
+- No debe contener `..`.
+- No debe ser ruta absoluta.
+- Debe mostrarse en el resumen del workflow para trazabilidad.
+
+Los workflows ejecutan los scripts remotos pasando `MANIFEST` de forma explícita. Ejemplos:
+
+```bash
+MANIFEST=releases/v0.1.1.json scripts/prod/v4nex-audit-state.sh
+MANIFEST=releases/v0.1.1.json scripts/prod/v4nex-preflight.sh
+MANIFEST=releases/v0.1.1.json scripts/prod/v4nex-smoke.sh minimal
+V4NEX_DRY_RUN=1 MANIFEST=releases/v0.1.1.json scripts/prod/v4nex-deploy.sh
+V4NEX_DRY_RUN=1 MANIFEST=releases/v0.1.1.json scripts/prod/v4nex-rollback.sh
+```
+
+Esto evita validar accidentalmente `releases/v0.1.0.json` cuando la intención operativa es validar un release posterior.
+
 ## Variables y secretos requeridos
 
 Environment variables:
+
 - PROD_SSH_HOST
 - PROD_SSH_USER
 - PROD_APP_PATH
 - PROD_SSH_PORT
 
 Environment secret:
+
 - PROD_SSH_PRIVATE_KEY
 
 Los valores no sensibles de conexión SSH se manejan como Environment variables para evitar masking innecesario en logs. La clave privada SSH permanece como Environment secret.
@@ -64,19 +97,20 @@ Cada workflow requiere:
 1. Aprobación de la ronda correspondiente.
 2. Ejecución manual desde GitHub Actions.
 3. Confirmación escrita en el input del workflow.
-4. Aprobación del Environment `production`.
+4. Selección explícita de `release_manifest`.
+5. Aprobación del Environment `production`.
 
 ## Orden recomendado de ejecución
 
 Para una validación no destructiva, el orden recomendado es:
 
-1. `prod-preflight.yml`.
-2. `prod-smoke-minimal.yml`.
-3. `prod-deploy-dry-run.yml`.
-4. `prod-rollback-dry-run.yml`.
-5. `prod-audit-state.yml`.
+1. `prod-audit-state.yml`.
+2. `prod-preflight.yml`.
+3. `prod-smoke-minimal.yml`.
+4. `prod-deploy-dry-run.yml`.
+5. `prod-rollback-dry-run.yml`.
 
-Este orden replica la secuencia validada en seco durante Fase 2.
+Este orden reduce riesgo porque primero confirma el estado readonly, luego valida preflight, luego smoke minimal y finalmente dry-runs.
 
 ## Dry-run vs deploy real
 
@@ -109,7 +143,9 @@ La primera iteración se considera aceptable si:
 - todos usan Environment `production`;
 - todos tienen timeout;
 - todos validan configuración mínima;
-- todos escriben resumen de ejecución;
+- todos validan `release_manifest`;
+- todos pasan `MANIFEST` explícitamente al comando remoto;
+- todos escriben resumen de ejecución con el manifest seleccionado;
 - ninguno se ejecuta por push o pull request;
 - ninguno ejecuta deploy real;
 - ninguno ejecuta rollback real;
