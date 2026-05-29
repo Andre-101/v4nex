@@ -1,4 +1,4 @@
-﻿name: prod-smoke-minimal
+name: prod-smoke-minimal
 
 on:
   workflow_dispatch:
@@ -93,5 +93,3 @@ jobs:
             echo "- Smoke extended: no"
             echo "- Deploy real: no"
           } >> "$GITHUB_STEP_SUMMARY"
-
-

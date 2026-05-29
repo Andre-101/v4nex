@@ -1,4 +1,4 @@
-﻿name: prod-preflight
+name: prod-preflight
 
 on:
   workflow_dispatch:
@@ -92,5 +92,3 @@ jobs:
             echo "- Trigger: workflow_dispatch"
             echo "- Deploy real: no"
           } >> "$GITHUB_STEP_SUMMARY"
-
-

@@ -1,4 +1,4 @@
-﻿name: prod-rollback-dry-run
+name: prod-rollback-dry-run
 
 on:
   workflow_dispatch:
@@ -92,5 +92,3 @@ jobs:
             echo "- Trigger: workflow_dispatch"
             echo "- Rollback real: no"
           } >> "$GITHUB_STEP_SUMMARY"
-
-

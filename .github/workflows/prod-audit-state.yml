@@ -1,4 +1,4 @@
-﻿name: prod-audit-state
+name: prod-audit-state
 
 on:
   workflow_dispatch:
@@ -93,5 +93,3 @@ jobs:
             echo "- Readonly audit: yes"
             echo "- Deploy real: no"
           } >> "$GITHUB_STEP_SUMMARY"
-
-
