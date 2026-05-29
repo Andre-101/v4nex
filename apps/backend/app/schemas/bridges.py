@@ -12,6 +12,12 @@ class BridgeCreateRequest(BaseModel):
     target_port: int
 
 
+class BridgeUpdateRequest(BaseModel):
+    subdomain: str | None = None
+    target_ipv6: str | None = None
+    target_port: int | None = None
+
+
 class BridgeResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

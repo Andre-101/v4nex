@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -15,7 +15,7 @@ from app.domain.validators import validate_ipv6, validate_port, validate_subdoma
 from app.models.bridge import Bridge
 from app.models.bridge_event import BridgeEvent
 from app.models.user import User
-from app.schemas.bridges import BridgeCreateRequest, BridgeEventResponse, BridgeResponse
+from app.schemas.bridges import BridgeCreateRequest, BridgeEventResponse, BridgeResponse, BridgeUpdateRequest
 from app.services.caddy_activation import (
     CaddyActivationResult,
     activate_bridge_routes,
@@ -67,6 +67,26 @@ def get_owned_bridge(bridge_id: str, user: User, db: Session) -> Bridge:
             details={"bridge_id": bridge_id},
         )
     return bridge
+
+
+def ensure_bridge_not_active(bridge: Bridge, action: str) -> None:
+    if BridgeStatus(bridge.status) != BridgeStatus.ACTIVE:
+        return
+
+    message = (
+        "This bridge is active. Disable it before editing."
+        if action == "edit"
+        else "This bridge is active. Disable it before deleting."
+    )
+    raise AppError(
+        code=ErrorCode.INVALID_STATE_TRANSITION,
+        message=message,
+        details={
+            "bridge_id": bridge.id,
+            "status": bridge.status,
+            "action": action,
+        },
+    )
 
 
 def add_bridge_event(
@@ -224,6 +244,86 @@ def get_bridge(
     db: Session = Depends(get_db),
 ) -> BridgeResponse:
     return bridge_to_response(get_owned_bridge(bridge_id, current_user, db))
+
+
+@router.patch("/{bridge_id}", response_model=BridgeResponse)
+def update_bridge(
+    bridge_id: str,
+    payload: BridgeUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> BridgeResponse:
+    bridge = get_owned_bridge(bridge_id, current_user, db)
+    ensure_bridge_not_active(bridge, "edit")
+
+    updates = payload.model_dump(exclude_unset=True)
+    if not updates:
+        return bridge_to_response(bridge)
+
+    changed_fields: list[str] = []
+    if "subdomain" in updates:
+        subdomain = validate_subdomain(payload.subdomain or "")
+        existing_bridge = db.scalar(
+            select(Bridge)
+            .where(Bridge.subdomain == subdomain)
+            .where(Bridge.id != bridge.id)
+        )
+        if existing_bridge is not None:
+            raise AppError(
+                code=ErrorCode.SUBDOMAIN_ALREADY_EXISTS,
+                message="Subdomain already exists.",
+                details={"subdomain": subdomain},
+            )
+        if bridge.subdomain != subdomain:
+            bridge.subdomain = subdomain
+            bridge.public_url = f"https://{subdomain}.{settings.public_domain}"
+            changed_fields.append("subdomain")
+
+    if "target_ipv6" in updates:
+        target_ipv6 = validate_ipv6(payload.target_ipv6 or "")
+        if bridge.target_ipv6 != target_ipv6:
+            bridge.target_ipv6 = target_ipv6
+            changed_fields.append("target_ipv6")
+
+    if "target_port" in updates:
+        target_port = validate_port(payload.target_port)
+        if bridge.target_port != target_port:
+            bridge.target_port = target_port
+            changed_fields.append("target_port")
+
+    if changed_fields:
+        bridge.status = BridgeStatus.DRAFT.value
+        bridge.last_tcp_validation_at = None
+        bridge.last_tcp_validation_result = None
+        bridge.last_heartbeat_at = None
+        bridge.last_heartbeat_result = None
+        bridge.activated_at = None
+        bridge.disabled_at = None
+        add_bridge_event(
+            db=db,
+            bridge=bridge,
+            event_type="BRIDGE_UPDATED",
+            message="Bridge updated and reset to DRAFT status.",
+            metadata={"changed_fields": changed_fields},
+        )
+        db.commit()
+        db.refresh(bridge)
+
+    return bridge_to_response(bridge)
+
+
+@router.delete("/{bridge_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_bridge(
+    bridge_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    bridge = get_owned_bridge(bridge_id, current_user, db)
+    ensure_bridge_not_active(bridge, "delete")
+
+    db.delete(bridge)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/{bridge_id}/events", response_model=list[BridgeEventResponse])

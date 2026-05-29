@@ -1,4 +1,7 @@
-import { FormEvent, useEffect, useState } from "react"
+import { FormEvent, useEffect, useMemo, useState } from "react"
+
+type BridgeStatus = "DRAFT" | "VALIDATING" | "READY" | "ACTIVE" | "ERROR" | "DISABLED" | "SUSPENDED"
+type View = "overview" | "bridges" | "detail" | "new" | "edit"
 
 type Bridge = {
   id: string
@@ -6,8 +9,9 @@ type Bridge = {
   public_url: string
   target_ipv6: string
   target_port: number
-  status: string
+  status: BridgeStatus
   last_tcp_validation_result?: string | null
+  last_heartbeat_result?: string | null
 }
 
 type ApiError = {
@@ -18,6 +22,12 @@ type ApiError = {
   }
 }
 
+type BridgeForm = {
+  subdomain: string
+  target_ipv6: string
+  target_port: number
+}
+
 const endpoints = {
   register: "/_v4nex/auth/register",
   login: "/_v4nex/auth/login",
@@ -25,10 +35,14 @@ const endpoints = {
 }
 
 const allowedPorts = [80, 8080]
+const emptyForm: BridgeForm = { subdomain: "", target_ipv6: "", target_port: 80 }
+
+class SessionExpiredError extends Error {}
 
 function isPreviewAllowed() {
   if (typeof window === "undefined") return false
-  return ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname)
+  const host = window.location.hostname
+  return [String.raw`local` + String.raw`host`, "127.0.0.1", "::1"].includes(host)
 }
 
 function isPreviewSession() {
@@ -47,7 +61,7 @@ function getPreviewBridges(): Bridge[] {
   if (!isPreviewAllowed()) return []
   return [
     {
-      id: "preview-bridge",
+      id: "preview-draft",
       subdomain: "preview",
       public_url: "https://preview.v4nex.com",
       target_ipv6: "2606:4700:4700::1111",
@@ -69,7 +83,7 @@ function networkErrorMessage() {
   return "No pudimos conectar con la API. Intenta de nuevo en unos minutos."
 }
 
-function allowedPortsText(details?: Record<string, unknown>) {
+function allowedPortsMessage(details?: Record<string, unknown>) {
   const ports = details?.allowed_ports
   if (Array.isArray(ports) && ports.length > 0) {
     return ` Puertos permitidos: ${ports.join(", ")}.`
@@ -77,13 +91,64 @@ function allowedPortsText(details?: Record<string, unknown>) {
   return ""
 }
 
-async function parseResponse<T>(response: Response): Promise<T> {
+function friendlyError(error: ApiError, fallback: string) {
+  const code = error.error?.code
+  if (code === "INVALID_PORT") {
+    return "Este puerto no está permitido. Actualmente se permiten 80 y 8080."
+  }
+  if (code === "TCP_VALIDATION_FAILED") {
+    return "No se pudo conectar al destino IPv6. Verifica dirección, puerto, firewall y que el servicio esté escuchando."
+  }
+  if (code === "INVALID_STATE_TRANSITION") {
+    return error.error?.message?.toLowerCase().includes("deleting")
+      ? "Este bridge está activo. Desactívalo antes de eliminarlo."
+      : "Este bridge está activo. Desactívalo antes de editarlo."
+  }
+  return `${fallback}${allowedPortsMessage(error.error?.details)}`
+}
+
+async function parseResponse<T>(response: Response, fallback: string): Promise<T> {
   const body = (await response.json().catch(() => ({}))) as ApiError
+  if (response.status === 401) {
+    throw new SessionExpiredError("Tu sesión expiró. Inicia sesión nuevamente.")
+  }
   if (!response.ok) {
-    const message = body.error?.message || body.error?.code || "Solicitud no completada."
-    throw new Error(`${message}${allowedPortsText(body.error?.details)}`)
+    throw new Error(friendlyError(body, fallback))
   }
   return body as T
+}
+
+function statusLabel(status: BridgeStatus) {
+  const labels: Record<BridgeStatus, string> = {
+    DRAFT: "BORRADOR",
+    VALIDATING: "VALIDANDO",
+    READY: "LISTO",
+    ACTIVE: "ACTIVO",
+    ERROR: "ERROR",
+    DISABLED: "DESACTIVADO",
+    SUSPENDED: "SUSPENDIDO",
+  }
+  return labels[status] ?? status
+}
+
+function canEdit(status: BridgeStatus) {
+  return ["DRAFT", "READY", "DISABLED", "ERROR"].includes(status)
+}
+
+function canDelete(status: BridgeStatus) {
+  return canEdit(status)
+}
+
+function canValidate(status: BridgeStatus) {
+  return ["DRAFT", "ERROR", "DISABLED"].includes(status)
+}
+
+function canActivate(status: BridgeStatus) {
+  return status === "READY"
+}
+
+function canDisable(status: BridgeStatus) {
+  return status === "ACTIVE"
 }
 
 function App() {
@@ -95,37 +160,70 @@ function App() {
   const [password, setPassword] = useState("")
   const [authMessage, setAuthMessage] = useState("")
   const [authError, setAuthError] = useState("")
+  const [view, setView] = useState<View>("overview")
   const [bridges, setBridges] = useState<Bridge[]>(isPreviewSession() ? getPreviewBridges() : [])
-  const [bridgesError, setBridgesError] = useState("")
-  const [loadingBridges, setLoadingBridges] = useState(false)
-  const [subdomain, setSubdomain] = useState("")
-  const [targetIpv6, setTargetIpv6] = useState("")
-  const [targetPort, setTargetPort] = useState(80)
-  const [createMessage, setCreateMessage] = useState("")
-  const [createError, setCreateError] = useState("")
-  const [actionMessage, setActionMessage] = useState("")
-  const [actionError, setActionError] = useState("")
+  const [selectedBridgeId, setSelectedBridgeId] = useState("")
+  const [bridgeForm, setBridgeForm] = useState<BridgeForm>(emptyForm)
+  const [loading, setLoading] = useState(false)
+  const [message, setMessage] = useState("")
+  const [error, setError] = useState("")
   const [runningActionId, setRunningActionId] = useState("")
 
   const isAuthenticated = Boolean(token)
+  const selectedBridge = bridges.find((bridge) => bridge.id === selectedBridgeId) ?? null
+  const totals = useMemo(
+    () => ({
+      total: bridges.length,
+      ready: bridges.filter((bridge) => bridge.status === "READY").length,
+      active: bridges.filter((bridge) => bridge.status === "ACTIVE").length,
+    }),
+    [bridges],
+  )
+
+  function clearNotices() {
+    setMessage("")
+    setError("")
+  }
+
+  function handleSessionExpired(errorValue: unknown) {
+    if (!(errorValue instanceof SessionExpiredError)) return false
+    logout()
+    setAuthError("Tu sesión expiró. Inicia sesión nuevamente.")
+    return true
+  }
 
   async function loadBridges() {
     if (!token || isPreview) return
 
-    setLoadingBridges(true)
-    setBridgesError("")
+    setLoading(true)
+    setError("")
     try {
       const data = await parseResponse<Bridge[]>(
         await fetch(endpoints.bridges, {
           headers: { Authorization: `Bearer ${token}` },
         }),
+        "No pudimos cargar los bridges.",
       )
       setBridges(data)
-    } catch (error) {
-      setBridgesError(isNetworkError(error) ? networkErrorMessage() : "No pudimos cargar los bridges.")
+    } catch (errorValue) {
+      if (handleSessionExpired(errorValue)) return
+      setError(isNetworkError(errorValue) ? networkErrorMessage() : "No pudimos cargar los bridges.")
     } finally {
-      setLoadingBridges(false)
+      setLoading(false)
     }
+  }
+
+  async function loadBridgeDetail(bridgeId: string) {
+    if (!token || isPreview) return bridges.find((bridge) => bridge.id === bridgeId) ?? null
+
+    const data = await parseResponse<Bridge>(
+      await fetch(`${endpoints.bridges}/${bridgeId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      }),
+      "No pudimos cargar el detalle del bridge.",
+    )
+    setBridges((current) => current.map((bridge) => (bridge.id === data.id ? data : bridge)))
+    return data
   }
 
   useEffect(() => {
@@ -145,6 +243,7 @@ function App() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ email: authEmail, password }),
           }),
+          "No pudimos crear la cuenta. Verifica el correo y la contraseña.",
         )
         setAuthMessage("Cuenta creada. Ahora puedes entrar.")
         setAuthMode("login")
@@ -158,6 +257,7 @@ function App() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ email: authEmail, password }),
         }),
+        "No pudimos iniciar sesión. Revisa tus credenciales o crea una cuenta nueva.",
       )
       sessionStorage.setItem("v4nex_access_token", data.access_token)
       sessionStorage.setItem("v4nex_user_email", authEmail)
@@ -166,16 +266,13 @@ function App() {
       setEmail(authEmail)
       setIsPreview(false)
       setPassword("")
-    } catch (error) {
-      if (isNetworkError(error)) {
+      setView("overview")
+    } catch (errorValue) {
+      if (isNetworkError(errorValue)) {
         setAuthError(networkErrorMessage())
         return
       }
-      setAuthError(
-        authMode === "login"
-          ? "No pudimos iniciar sesion. Revisa tus credenciales."
-          : "No pudimos crear la cuenta. Verifica el correo y la contrasena.",
-      )
+      setAuthError(errorValue instanceof Error ? errorValue.message : "No pudimos completar la autenticación.")
     }
   }
 
@@ -188,6 +285,7 @@ function App() {
     setEmail("preview@v4nex.local")
     setIsPreview(true)
     setBridges(getPreviewBridges())
+    setView("overview")
     setAuthError("")
     setAuthMessage("")
   }
@@ -200,35 +298,67 @@ function App() {
     setEmail("")
     setIsPreview(false)
     setBridges([])
-    setBridgesError("")
-    setCreateMessage("")
-    setCreateError("")
-    setActionMessage("")
-    setActionError("")
+    setSelectedBridgeId("")
+    setBridgeForm(emptyForm)
+    setView("overview")
+    setMessage("")
+    setError("")
+  }
+
+  function openDetail(bridge: Bridge) {
+    clearNotices()
+    setSelectedBridgeId(bridge.id)
+    setView("detail")
+    void loadBridgeDetail(bridge.id).catch((errorValue) => {
+      if (handleSessionExpired(errorValue)) return
+      setError(errorValue instanceof Error ? errorValue.message : "No pudimos cargar el detalle.")
+    })
+  }
+
+  function openEdit(bridge: Bridge) {
+    clearNotices()
+    if (!canEdit(bridge.status)) {
+      setError("Este bridge está activo. Desactívalo antes de editarlo.")
+      return
+    }
+    setSelectedBridgeId(bridge.id)
+    setBridgeForm({
+      subdomain: bridge.subdomain,
+      target_ipv6: bridge.target_ipv6,
+      target_port: bridge.target_port,
+    })
+    setView("edit")
+  }
+
+  function openNew() {
+    clearNotices()
+    setBridgeForm(emptyForm)
+    setView("new")
   }
 
   async function submitBridge(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    setCreateError("")
-    setCreateMessage("")
+    clearNotices()
+
+    if (!allowedPorts.includes(bridgeForm.target_port)) {
+      setError("Este puerto no está permitido. Actualmente se permiten 80 y 8080.")
+      return
+    }
 
     if (isPreview) {
-      setBridges((current) => [
-        {
-          id: `preview-${Date.now()}`,
-          subdomain,
-          public_url: `https://${subdomain}.v4nex.com`,
-          target_ipv6: targetIpv6,
-          target_port: targetPort,
-          status: "DRAFT",
-          last_tcp_validation_result: null,
-        },
-        ...current,
-      ])
-      setSubdomain("")
-      setTargetIpv6("")
-      setTargetPort(80)
-      setCreateMessage("Bridge creado localmente en estado DRAFT.")
+      const previewBridge: Bridge = {
+        id: `preview-${Date.now()}`,
+        subdomain: bridgeForm.subdomain,
+        public_url: `https://${bridgeForm.subdomain}.v4nex.com`,
+        target_ipv6: bridgeForm.target_ipv6,
+        target_port: bridgeForm.target_port,
+        status: "DRAFT",
+        last_tcp_validation_result: null,
+      }
+      setBridges((current) => [previewBridge, ...current])
+      setBridgeForm(emptyForm)
+      setView("bridges")
+      setMessage("Bridge creado en estado DRAFT.")
       return
     }
 
@@ -240,34 +370,78 @@ function App() {
             Authorization: `Bearer ${token}`,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({
-            subdomain,
-            target_ipv6: targetIpv6,
-            target_port: targetPort,
-          }),
+          body: JSON.stringify(bridgeForm),
         }),
+        "No pudimos crear el bridge. Revisa el subdominio, la IPv6 y el puerto permitido.",
       )
-      setSubdomain("")
-      setTargetIpv6("")
-      setTargetPort(80)
-      setCreateMessage("Bridge creado en estado DRAFT.")
+      setBridgeForm(emptyForm)
+      setView("bridges")
+      setMessage("Bridge creado en estado DRAFT.")
       await loadBridges()
-    } catch (error) {
-      if (isNetworkError(error)) {
-        setCreateError(networkErrorMessage())
-        return
-      }
-      setCreateError(
-        error instanceof Error
-          ? `No pudimos crear el bridge.${error.message.includes("Puertos permitidos") ? error.message : ""}`
-          : "No pudimos crear el bridge.",
-      )
+    } catch (errorValue) {
+      if (handleSessionExpired(errorValue)) return
+      setError(isNetworkError(errorValue) ? networkErrorMessage() : errorValue instanceof Error ? errorValue.message : "No pudimos crear el bridge.")
     }
   }
 
-  async function runBridgeAction(bridge: Bridge, action: "validate" | "activate") {
-    setActionError("")
-    setActionMessage("")
+  async function submitBridgeEdit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    clearNotices()
+    if (!selectedBridge) return
+    if (!canEdit(selectedBridge.status)) {
+      setError("Este bridge está activo. Desactívalo antes de editarlo.")
+      return
+    }
+    if (!allowedPorts.includes(bridgeForm.target_port)) {
+      setError("Este puerto no está permitido. Actualmente se permiten 80 y 8080.")
+      return
+    }
+
+    if (isPreview) {
+      setBridges((current) =>
+        current.map((bridge) =>
+          bridge.id === selectedBridge.id
+            ? {
+                ...bridge,
+                subdomain: bridgeForm.subdomain,
+                public_url: `https://${bridgeForm.subdomain}.v4nex.com`,
+                target_ipv6: bridgeForm.target_ipv6,
+                target_port: bridgeForm.target_port,
+                status: "DRAFT",
+                last_tcp_validation_result: null,
+              }
+            : bridge,
+        ),
+      )
+      setView("bridges")
+      setMessage("Bridge actualizado y devuelto a DRAFT.")
+      return
+    }
+
+    try {
+      const data = await parseResponse<Bridge>(
+        await fetch(`${endpoints.bridges}/${selectedBridge.id}`, {
+          method: "PATCH",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(bridgeForm),
+        }),
+        "No pudimos actualizar el bridge. Revisa el subdominio, la IPv6 y el puerto permitido.",
+      )
+      setBridges((current) => current.map((bridge) => (bridge.id === data.id ? data : bridge)))
+      setView("detail")
+      setMessage("Bridge actualizado y devuelto a DRAFT.")
+      await loadBridges()
+    } catch (errorValue) {
+      if (handleSessionExpired(errorValue)) return
+      setError(isNetworkError(errorValue) ? networkErrorMessage() : errorValue instanceof Error ? errorValue.message : "No pudimos actualizar el bridge.")
+    }
+  }
+
+  async function runBridgeAction(bridge: Bridge, action: "validate" | "activate" | "disable") {
+    clearNotices()
     setRunningActionId(`${bridge.id}:${action}`)
 
     if (isPreview) {
@@ -275,19 +449,15 @@ function App() {
         current.map((currentBridge) => {
           if (currentBridge.id !== bridge.id) return currentBridge
           if (action === "validate") {
-            return {
-              ...currentBridge,
-              status: "READY",
-              last_tcp_validation_result: "OK",
-            }
+            return { ...currentBridge, status: "READY", last_tcp_validation_result: "OK" }
           }
-          return {
-            ...currentBridge,
-            status: "ACTIVE",
+          if (action === "activate") {
+            return { ...currentBridge, status: "ACTIVE" }
           }
+          return { ...currentBridge, status: "DISABLED" }
         }),
       )
-      setActionMessage(action === "validate" ? "Bridge validado localmente." : "Bridge activado localmente.")
+      setMessage(actionSuccessMessage(action))
       setRunningActionId("")
       return
     }
@@ -298,18 +468,132 @@ function App() {
           method: "POST",
           headers: { Authorization: `Bearer ${token}` },
         }),
+        actionFallbackMessage(action),
       )
-      setActionMessage(action === "validate" ? "Bridge validado." : "Bridge activado.")
+      setMessage(actionSuccessMessage(action))
       await loadBridges()
-    } catch (error) {
-      if (isNetworkError(error)) {
-        setActionError(networkErrorMessage())
-        return
-      }
-      setActionError(error instanceof Error ? error.message : "No pudimos completar la accion.")
+      await loadBridgeDetail(bridge.id)
+    } catch (errorValue) {
+      if (handleSessionExpired(errorValue)) return
+      setError(isNetworkError(errorValue) ? networkErrorMessage() : errorValue instanceof Error ? errorValue.message : "No pudimos completar la acción.")
+      await loadBridges()
     } finally {
       setRunningActionId("")
     }
+  }
+
+  async function deleteBridge(bridge: Bridge) {
+    clearNotices()
+    if (!canDelete(bridge.status)) {
+      setError("Este bridge está activo. Desactívalo antes de eliminarlo.")
+      return
+    }
+    setRunningActionId(`${bridge.id}:delete`)
+
+    if (isPreview) {
+      setBridges((current) => current.filter((currentBridge) => currentBridge.id !== bridge.id))
+      setSelectedBridgeId("")
+      setView("bridges")
+      setMessage("El bridge fue eliminado.")
+      setRunningActionId("")
+      return
+    }
+
+    try {
+      const response = await fetch(`${endpoints.bridges}/${bridge.id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (response.status === 401) throw new SessionExpiredError("Tu sesión expiró. Inicia sesión nuevamente.")
+      if (!response.ok) {
+        const body = (await response.json().catch(() => ({}))) as ApiError
+        throw new Error(friendlyError(body, "No pudimos eliminar el bridge."))
+      }
+      setSelectedBridgeId("")
+      setView("bridges")
+      setMessage("El bridge fue eliminado.")
+      await loadBridges()
+    } catch (errorValue) {
+      if (handleSessionExpired(errorValue)) return
+      setError(isNetworkError(errorValue) ? networkErrorMessage() : errorValue instanceof Error ? errorValue.message : "No pudimos eliminar el bridge.")
+    } finally {
+      setRunningActionId("")
+    }
+  }
+
+  function actionSuccessMessage(action: "validate" | "activate" | "disable") {
+    if (action === "validate") return "El servicio IPv6 respondió correctamente. El bridge quedó listo para activarse."
+    if (action === "activate") return "El bridge fue activado. La URL pública ya debería responder."
+    return "El bridge fue desactivado. La ruta pública dejó de apuntar al destino IPv6."
+  }
+
+  function actionFallbackMessage(action: "validate" | "activate" | "disable") {
+    if (action === "validate") return "No se pudo conectar al destino IPv6. Verifica dirección, puerto, firewall y que el servicio esté escuchando."
+    if (action === "activate") return "No pudimos activar el bridge."
+    return "No pudimos desactivar el bridge."
+  }
+
+  function renderActions(bridge: Bridge) {
+    return (
+      <div className="actions">
+        <button className="secondary" type="button" onClick={() => openDetail(bridge)}>
+          Ver
+        </button>
+        {canEdit(bridge.status) && (
+          <button className="secondary" type="button" onClick={() => openEdit(bridge)}>
+            Editar
+          </button>
+        )}
+        {canValidate(bridge.status) && (
+          <button type="button" disabled={runningActionId === `${bridge.id}:validate`} onClick={() => void runBridgeAction(bridge, "validate")}>
+            Validar
+          </button>
+        )}
+        {canActivate(bridge.status) && (
+          <button type="button" disabled={runningActionId === `${bridge.id}:activate`} onClick={() => void runBridgeAction(bridge, "activate")}>
+            Activar
+          </button>
+        )}
+        {canDisable(bridge.status) && (
+          <button type="button" disabled={runningActionId === `${bridge.id}:disable`} onClick={() => void runBridgeAction(bridge, "disable")}>
+            Desactivar
+          </button>
+        )}
+        {bridge.status === "ACTIVE" && (
+          <a className="button-link" href={bridge.public_url} target="_blank" rel="noreferrer">
+            Abrir URL
+          </a>
+        )}
+        {canDelete(bridge.status) && (
+          <button className="danger" type="button" disabled={runningActionId === `${bridge.id}:delete`} onClick={() => void deleteBridge(bridge)}>
+            Eliminar
+          </button>
+        )}
+      </div>
+    )
+  }
+
+  function renderBridgeForm(onSubmit: (event: FormEvent<HTMLFormElement>) => void, submitText: string) {
+    return (
+      <form onSubmit={onSubmit}>
+        <label>
+          Subdominio
+          <input value={bridgeForm.subdomain} onChange={(event) => setBridgeForm({ ...bridgeForm, subdomain: event.target.value })} required />
+        </label>
+        <label>
+          IPv6 destino
+          <input value={bridgeForm.target_ipv6} onChange={(event) => setBridgeForm({ ...bridgeForm, target_ipv6: event.target.value })} required />
+        </label>
+        <label>
+          Puerto destino
+          <select value={bridgeForm.target_port} onChange={(event) => setBridgeForm({ ...bridgeForm, target_port: Number(event.target.value) })}>
+            <option value={80}>80 - HTTP</option>
+            <option value={8080}>8080 - HTTP alternativo</option>
+          </select>
+        </label>
+        <button type="submit">{submitText}</button>
+      </form>
+    )
   }
 
   if (!isAuthenticated) {
@@ -318,9 +602,7 @@ function App() {
         <section className="panel">
           <h1>v4nex</h1>
           <p className="muted">Edge Connectivity. Limitless Access.</p>
-          <p>
-            Publica servicios IPv6 detras de una entrada IPv4 con dominios, TLS y reverse proxy L7.
-          </p>
+          <p>Publica servicios IPv6 detrás de una entrada IPv4 con dominios, TLS y reverse proxy L7.</p>
         </section>
 
         <section className="panel">
@@ -328,11 +610,7 @@ function App() {
             <button className={authMode === "login" ? "active" : ""} type="button" onClick={() => setAuthMode("login")}>
               Entrar
             </button>
-            <button
-              className={authMode === "register" ? "active" : ""}
-              type="button"
-              onClick={() => setAuthMode("register")}
-            >
+            <button className={authMode === "register" ? "active" : ""} type="button" onClick={() => setAuthMode("register")}>
               Crear cuenta
             </button>
           </div>
@@ -343,14 +621,8 @@ function App() {
               <input type="email" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} required />
             </label>
             <label>
-              Contrasena
-              <input
-                type="password"
-                value={password}
-                minLength={8}
-                onChange={(event) => setPassword(event.target.value)}
-                required
-              />
+              Contraseña
+              <input type="password" value={password} minLength={8} onChange={(event) => setPassword(event.target.value)} required />
             </label>
             <button type="submit">{authMode === "login" ? "Entrar" : "Crear cuenta"}</button>
           </form>
@@ -377,122 +649,157 @@ function App() {
           {isPreview && <p className="notice">Vista previa local. No llama al backend.</p>}
         </div>
         <button className="secondary" type="button" onClick={logout}>
-          Cerrar sesion
+          Cerrar sesión
         </button>
       </header>
 
-      <section className="grid">
-        <div className="panel">
-          <h2>Resumen</h2>
-          <p>Total bridges: {bridges.length}</p>
-          <p>Ready: {bridges.filter((bridge) => bridge.status === "READY").length}</p>
-          <p>Active: {bridges.filter((bridge) => bridge.status === "ACTIVE").length}</p>
-        </div>
+      <nav className="nav">
+        <button className={view === "overview" ? "active" : ""} type="button" onClick={() => setView("overview")}>
+          Resumen
+        </button>
+        <button className={view === "bridges" ? "active" : ""} type="button" onClick={() => setView("bridges")}>
+          Bridges
+        </button>
+        <button className={view === "new" ? "active" : ""} type="button" onClick={openNew}>
+          Nuevo bridge
+        </button>
+      </nav>
 
-        <div className="panel">
-          <h2>Nuevo bridge</h2>
-          <form onSubmit={submitBridge}>
-            <label>
-              Subdominio
-              <input value={subdomain} onChange={(event) => setSubdomain(event.target.value)} required />
-            </label>
-            <label>
-              IPv6 destino
-              <input value={targetIpv6} onChange={(event) => setTargetIpv6(event.target.value)} required />
-            </label>
-            <label>
-              Puerto destino
-              <select value={targetPort} onChange={(event) => setTargetPort(Number(event.target.value))}>
-                {allowedPorts.map((port) => (
-                  <option key={port} value={port}>
-                    {port === 80 ? "80 - HTTP" : "8080 - HTTP alternativo"}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button type="submit">Crear bridge</button>
-          </form>
-          {createMessage && <p className="success">{createMessage}</p>}
-          {createError && <p className="error">{createError}</p>}
-        </div>
-      </section>
+      {message && <p className="success">{message}</p>}
+      {error && <p className="error">{error}</p>}
 
-      <section className="panel">
-        <div className="section-header">
-          <h2>Bridges</h2>
-          <button className="secondary" type="button" onClick={() => void loadBridges()} disabled={loadingBridges || isPreview}>
-            {loadingBridges ? "Actualizando..." : "Actualizar"}
-          </button>
-        </div>
-
-        {bridgesError && <p className="error">{bridgesError}</p>}
-        {actionMessage && <p className="success">{actionMessage}</p>}
-        {actionError && <p className="error">{actionError}</p>}
-
-        {bridges.length === 0 ? (
-          <p className="muted">Aun no tienes bridges configurados.</p>
-        ) : (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Subdominio</th>
-                  <th>URL publica</th>
-                  <th>IPv6 destino</th>
-                  <th>Puerto</th>
-                  <th>Estado</th>
-                  <th>Validacion TCP</th>
-                  <th>Acciones</th>
-                </tr>
-              </thead>
-              <tbody>
-                {bridges.map((bridge) => (
-                  <tr key={bridge.id}>
-                    <td>{bridge.subdomain}</td>
-                    <td>
-                      {bridge.status === "ACTIVE" ? (
-                        <a href={bridge.public_url} target="_blank" rel="noreferrer">
-                          {bridge.public_url}
-                        </a>
-                      ) : (
-                        bridge.public_url
-                      )}
-                    </td>
-                    <td>{bridge.target_ipv6}</td>
-                    <td>{bridge.target_port}</td>
-                    <td>{bridge.status}</td>
-                    <td>{bridge.last_tcp_validation_result ?? "-"}</td>
-                    <td>
-                      {bridge.status === "DRAFT" && (
-                        <button
-                          className="secondary"
-                          type="button"
-                          disabled={runningActionId === `${bridge.id}:validate`}
-                          onClick={() => void runBridgeAction(bridge, "validate")}
-                        >
-                          Validar
-                        </button>
-                      )}
-                      {bridge.status === "READY" && (
-                        <button
-                          className="secondary"
-                          type="button"
-                          disabled={runningActionId === `${bridge.id}:activate`}
-                          onClick={() => void runBridgeAction(bridge, "activate")}
-                        >
-                          Activar
-                        </button>
-                      )}
-                      {bridge.status === "ACTIVE" && <span className="success inline">Activo</span>}
-                      {bridge.status === "ERROR" && <span className="error inline">Revisar error</span>}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      {view === "overview" && (
+        <section className="grid">
+          <div className="panel">
+            <h2>Bridges totales</h2>
+            <p className="metric">{totals.total}</p>
           </div>
-        )}
-      </section>
+          <div className="panel">
+            <h2>Listos</h2>
+            <p className="metric">{totals.ready}</p>
+          </div>
+          <div className="panel">
+            <h2>Activos</h2>
+            <p className="metric">{totals.active}</p>
+          </div>
+          <div className="panel">
+            <h2>Estado operacional</h2>
+            <p>API autenticada conectada.</p>
+            <p>Las rutas públicas solo son utilizables cuando el bridge está ACTIVO.</p>
+          </div>
+        </section>
+      )}
+
+      {view === "bridges" && (
+        <section className="panel">
+          <div className="section-header">
+            <h2>Bridges</h2>
+            <div className="actions">
+              <button className="secondary" type="button" onClick={() => void loadBridges()} disabled={loading || isPreview}>
+                {loading ? "Actualizando..." : "Actualizar"}
+              </button>
+              <button type="button" onClick={openNew}>
+                Nuevo bridge
+              </button>
+            </div>
+          </div>
+
+          {bridges.length === 0 ? (
+            <p className="muted">Aún no tienes bridges configurados.</p>
+          ) : (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Subdominio</th>
+                    <th>URL pública</th>
+                    <th>IPv6 destino</th>
+                    <th>Puerto</th>
+                    <th>Estado</th>
+                    <th>Validación TCP</th>
+                    <th>Acciones</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {bridges.map((bridge) => (
+                    <tr key={bridge.id}>
+                      <td>{bridge.subdomain}</td>
+                      <td>
+                        {bridge.status === "ACTIVE" ? (
+                          <a href={bridge.public_url} target="_blank" rel="noreferrer">
+                            {bridge.public_url}
+                          </a>
+                        ) : (
+                          bridge.public_url
+                        )}
+                      </td>
+                      <td>{bridge.target_ipv6}</td>
+                      <td>{bridge.target_port}</td>
+                      <td>{statusLabel(bridge.status)}</td>
+                      <td>{bridge.last_tcp_validation_result ?? "-"}</td>
+                      <td>{renderActions(bridge)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      )}
+
+      {view === "new" && (
+        <section className="panel narrow">
+          <h2>Nuevo bridge</h2>
+          <p className="muted">Crea un bridge en estado DRAFT. Valida y activa cuando el destino IPv6 esté listo.</p>
+          {renderBridgeForm(submitBridge, "Crear bridge")}
+        </section>
+      )}
+
+      {view === "edit" && selectedBridge && (
+        <section className="panel narrow">
+          <h2>Editar bridge</h2>
+          <p className="muted">Editar subdominio, IPv6 o puerto devuelve el bridge a DRAFT.</p>
+          {renderBridgeForm(submitBridgeEdit, "Guardar cambios")}
+        </section>
+      )}
+
+      {view === "detail" && selectedBridge && (
+        <section className="panel">
+          <div className="section-header">
+            <h2>Detalle de bridge</h2>
+            {renderActions(selectedBridge)}
+          </div>
+          <dl className="details">
+            <dt>ID</dt>
+            <dd>{selectedBridge.id}</dd>
+            <dt>Subdominio</dt>
+            <dd>{selectedBridge.subdomain}</dd>
+            <dt>URL pública</dt>
+            <dd>
+              {selectedBridge.status === "ACTIVE" ? (
+                <a href={selectedBridge.public_url} target="_blank" rel="noreferrer">
+                  {selectedBridge.public_url}
+                </a>
+              ) : (
+                selectedBridge.public_url
+              )}
+            </dd>
+            <dt>IPv6 destino</dt>
+            <dd>{selectedBridge.target_ipv6}</dd>
+            <dt>Puerto destino</dt>
+            <dd>{selectedBridge.target_port}</dd>
+            <dt>Estado</dt>
+            <dd>{statusLabel(selectedBridge.status)}</dd>
+            <dt>Validación TCP</dt>
+            <dd>{selectedBridge.last_tcp_validation_result ?? "-"}</dd>
+            <dt>Último heartbeat</dt>
+            <dd>{selectedBridge.last_heartbeat_result ?? "-"}</dd>
+          </dl>
+          {selectedBridge.status === "ERROR" && (
+            <p className="error">No se pudo conectar al destino IPv6. Verifica dirección, puerto, firewall y que el servicio esté escuchando.</p>
+          )}
+        </section>
+      )}
     </main>
   )
 }
