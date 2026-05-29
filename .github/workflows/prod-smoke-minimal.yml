@@ -17,44 +17,79 @@ concurrency:
 
 jobs:
   smoke-minimal:
+    name: Production smoke minimal
     runs-on: ubuntu-latest
     environment: production
     timeout-minutes: 20
+    env:
+      EXPECTED_CONFIRMATION: RUN_PROD_SMOKE_MINIMAL
+      PROD_SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      PROD_SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      PROD_SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      PROD_APP_PATH: ${{ secrets.PROD_APP_PATH }}
+      PROD_SSH_PORT: ${{ secrets.PROD_SSH_PORT }}
+      REMOTE_COMMAND: scripts/prod/v4nex-smoke.sh minimal
     steps:
-      - name: Validate confirmation
+      - name: Validate manual confirmation
+        shell: bash
         run: |
-          test "${{ inputs.confirm }}" = "RUN_PROD_SMOKE_MINIMAL"
+          if [ "${{ inputs.confirm }}" != "$EXPECTED_CONFIRMATION" ]; then
+            echo "Invalid confirmation. Expected: $EXPECTED_CONFIRMATION"
+            exit 1
+          fi
 
-      - name: Validate required secrets
-        env:
-          PROD_SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
-          PROD_SSH_USER: ${{ secrets.PROD_SSH_USER }}
-          PROD_SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
-          PROD_APP_PATH: ${{ secrets.PROD_APP_PATH }}
+      - name: Validate required configuration
+        shell: bash
         run: |
-          test -n "$PROD_SSH_HOST"
-          test -n "$PROD_SSH_USER"
-          test -n "$PROD_SSH_PRIVATE_KEY"
-          test -n "$PROD_APP_PATH"
+          missing=0
+          for name in PROD_SSH_HOST PROD_SSH_USER PROD_SSH_PRIVATE_KEY PROD_APP_PATH; do
+            if [ -z "${!name:-}" ]; then
+              echo "Missing required secret: $name"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+          if [ -z "${PROD_SSH_PORT:-}" ]; then
+            echo "PROD_SSH_PORT not set; using default 22"
+            echo "PROD_SSH_PORT=22" >> "$GITHUB_ENV"
+          fi
 
-      - name: Execute smoke minimal over SSH
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.PROD_SSH_HOST }}
-          username: ${{ secrets.PROD_SSH_USER }}
-          key: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
-          port: ${{ secrets.PROD_SSH_PORT || 22 }}
-          script_stop: true
-          command_timeout: 20m
-          script: |
-            set -Eeuo pipefail
-            cd "${{ secrets.PROD_APP_PATH }}"
-            scripts/prod/v4nex-smoke.sh minimal
+      - name: Prepare SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$RUNNER_TEMP/v4nex-ssh" "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          printf '%s\n' "$PROD_SSH_PRIVATE_KEY" > "$RUNNER_TEMP/v4nex-ssh/prod_key"
+          chmod 600 "$RUNNER_TEMP/v4nex-ssh/prod_key"
+          ssh-keyscan -p "$PROD_SSH_PORT" -H "$PROD_SSH_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Execute remote smoke minimal
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          remote_app_path="$(printf '%q' "$PROD_APP_PATH")"
+          ssh -i "$RUNNER_TEMP/v4nex-ssh/prod_key" \
+            -p "$PROD_SSH_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$PROD_SSH_USER@$PROD_SSH_HOST" \
+            "cd $remote_app_path && $REMOTE_COMMAND"
 
       - name: Write job summary
         if: always()
+        shell: bash
         run: |
-          echo "## v4nex production smoke minimal" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Workflow: prod-smoke-minimal" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Remote command: scripts/prod/v4nex-smoke.sh minimal" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Deploy real: no" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "## v4nex production smoke minimal"
+            echo "- Workflow: prod-smoke-minimal"
+            echo "- Remote command: scripts/prod/v4nex-smoke.sh minimal"
+            echo "- Environment: production"
+            echo "- Trigger: workflow_dispatch"
+            echo "- Smoke extended: no"
+            echo "- Deploy real: no"
+          } >> "$GITHUB_STEP_SUMMARY"
