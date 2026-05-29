@@ -1,0 +1,13 @@
+# Normalize text files
+* text=auto
+
+# Bash scripts must always use LF
+*.sh text eol=lf
+scripts/prod/*.sh text eol=lf
+scripts/prod/lib/*.sh text eol=lf
+
+# Common project text files
+*.md text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
