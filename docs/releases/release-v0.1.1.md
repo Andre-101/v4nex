@@ -18,6 +18,24 @@ Estado:
 
 Infra debe revisar y aprobar este contrato antes de ejecutar cualquier acción operativa.
 
+## Compatibilidad operativa
+
+El manifest `releases/v0.1.1.json` conserva compatibilidad estricta con el schema operativo validado en `v0.1.0`.
+
+Campos operativos canónicos para scripts:
+
+- `variables`
+- `variables.non_secret`
+- `variables.sensitive_names_only`
+- `variables.new_variables`
+- `variables.changed_variables`
+- `deployment.recreate`
+- `deployment.do_not_recreate`
+- `deployment.validate_only`
+- `deployment.requires_manual_approval`
+
+Si existen `env`, `deployment.services_to_recreate` o `deployment.services_not_to_recreate`, deben tratarse como alias informativos o de compatibilidad documental. No sustituyen a los campos operativos anteriores.
+
 ## Cambios funcionales
 
 Backend:
@@ -99,6 +117,8 @@ No hay migraciones declaradas para `v0.1.1`.
 
 ## Variables
 
+El bloque operativo usado por scripts es `variables`. El bloque `env`, si está presente, es informativo y mantiene los mismos valores para compatibilidad documental.
+
 Variables nuevas:
 
 ```text
@@ -131,6 +151,8 @@ El contrato no contiene valores secretos reales.
 
 ## Servicios a recrear
 
+Los campos operativos usados por scripts son `deployment.recreate` y `deployment.do_not_recreate`.
+
 Recrear:
 
 - `backend`
@@ -145,6 +167,8 @@ Servicios protegidos:
 
 - `db`
 - `caddy`
+
+Los campos `deployment.services_to_recreate` y `deployment.services_not_to_recreate`, si están presentes, son alias informativos. No reemplazan a `deployment.recreate` ni a `deployment.do_not_recreate`.
 
 ## Smoke esperado
 
