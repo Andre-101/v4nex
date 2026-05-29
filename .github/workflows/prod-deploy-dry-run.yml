@@ -1,0 +1,60 @@
+name: prod-deploy-dry-run
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type RUN_PROD_DEPLOY_DRY_RUN to execute production deploy dry-run"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prod-deploy-dry-run
+  cancel-in-progress: false
+
+jobs:
+  deploy-dry-run:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 20
+    steps:
+      - name: Validate confirmation
+        run: |
+          test "${{ inputs.confirm }}" = "RUN_PROD_DEPLOY_DRY_RUN"
+
+      - name: Validate required secrets
+        env:
+          PROD_SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          PROD_SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          PROD_SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          PROD_APP_PATH: ${{ secrets.PROD_APP_PATH }}
+        run: |
+          test -n "$PROD_SSH_HOST"
+          test -n "$PROD_SSH_USER"
+          test -n "$PROD_SSH_PRIVATE_KEY"
+          test -n "$PROD_APP_PATH"
+
+      - name: Execute deploy dry-run over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.PROD_SSH_HOST }}
+          username: ${{ secrets.PROD_SSH_USER }}
+          key: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          port: ${{ secrets.PROD_SSH_PORT || 22 }}
+          script_stop: true
+          command_timeout: 20m
+          script: |
+            set -Eeuo pipefail
+            cd "${{ secrets.PROD_APP_PATH }}"
+            V4NEX_DRY_RUN=1 scripts/prod/v4nex-deploy.sh
+
+      - name: Write job summary
+        if: always()
+        run: |
+          echo "## v4nex production deploy dry-run" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Workflow: prod-deploy-dry-run" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Remote command: V4NEX_DRY_RUN=1 scripts/prod/v4nex-deploy.sh" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Deploy real: no" >> "$GITHUB_STEP_SUMMARY"
