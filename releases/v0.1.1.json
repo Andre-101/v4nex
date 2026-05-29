@@ -36,6 +36,9 @@
       "recreate_policy": "no_recreate_unless_drift_or_manual_approval"
     }
   },
+  "platform": {
+    "platform_mode": "closed_temporarily"
+  },
   "migrations": {
     "required": false,
     "alembic_required": false,
