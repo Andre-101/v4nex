@@ -49,6 +49,17 @@ def set_bridge_status(bridge_id: str, status: BridgeStatus) -> None:
         db.commit()
 
 
+def set_bridge_ready_with_metadata(bridge_id: str) -> None:
+    with SessionLocal() as db:
+        bridge = db.get(Bridge, bridge_id)
+        assert bridge is not None
+        bridge.status = BridgeStatus.READY.value
+        bridge.last_tcp_validation_result = "OK"
+        bridge.activated_at = bridge.created_at
+        bridge.disabled_at = bridge.created_at
+        db.commit()
+
+
 def test_create_bridge_without_token_fails_401(client: TestClient) -> None:
     response = client.post(
         "/_v4nex/bridges",
@@ -222,6 +233,130 @@ def test_bridge_events_returns_bridge_created(client: TestClient) -> None:
     assert response.status_code == 200
     assert len(response.json()) == 1
     assert response.json()[0]["event_type"] == "BRIDGE_CREATED"
+
+
+def test_update_bridge_ready_resets_to_draft_and_clears_incompatible_state(client: TestClient) -> None:
+    token = register_and_login(client, "user@example.com")
+    bridge_id = create_bridge(client, token).json()["id"]
+    set_bridge_ready_with_metadata(bridge_id)
+
+    response = client.patch(
+        f"/_v4nex/bridges/{bridge_id}",
+        headers=auth_headers(token),
+        json={
+            "subdomain": "updated",
+            "target_ipv6": "2606:4700:4700::2222",
+            "target_port": 8080,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "DRAFT"
+    assert body["subdomain"] == "updated"
+    assert body["public_url"] == "https://updated.v4nex.com"
+    assert body["target_ipv6"] == "2606:4700:4700::2222"
+    assert body["target_port"] == 8080
+    assert body["last_tcp_validation_result"] is None
+    assert body["activated_at"] is None
+    assert body["disabled_at"] is None
+
+
+def test_update_active_bridge_is_blocked(client: TestClient) -> None:
+    token = register_and_login(client, "user@example.com")
+    bridge_id = create_bridge(client, token).json()["id"]
+    set_bridge_status(bridge_id, BridgeStatus.ACTIVE)
+
+    response = client.patch(
+        f"/_v4nex/bridges/{bridge_id}",
+        headers=auth_headers(token),
+        json={"target_port": 8080},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "INVALID_STATE_TRANSITION"
+
+
+def test_update_bridge_with_duplicate_subdomain_fails(client: TestClient) -> None:
+    token = register_and_login(client, "user@example.com")
+    first_id = create_bridge(client, token, subdomain="first").json()["id"]
+    assert create_bridge(client, token, subdomain="second").status_code == 201
+
+    response = client.patch(
+        f"/_v4nex/bridges/{first_id}",
+        headers=auth_headers(token),
+        json={"subdomain": "second"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "SUBDOMAIN_ALREADY_EXISTS"
+
+
+def test_update_bridge_with_disallowed_port_fails(client: TestClient) -> None:
+    token = register_and_login(client, "user@example.com")
+    bridge_id = create_bridge(client, token).json()["id"]
+
+    response = client.patch(
+        f"/_v4nex/bridges/{bridge_id}",
+        headers=auth_headers(token),
+        json={"target_port": 22},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "INVALID_PORT"
+    assert response.json()["error"]["details"] == {
+        "target_port": 22,
+        "allowed_ports": [80, 8080],
+    }
+
+
+def test_update_other_users_bridge_returns_not_found(client: TestClient) -> None:
+    first_token = register_and_login(client, "first@example.com")
+    second_token = register_and_login(client, "second@example.com")
+    bridge_id = create_bridge(client, first_token, subdomain="first").json()["id"]
+
+    response = client.patch(
+        f"/_v4nex/bridges/{bridge_id}",
+        headers=auth_headers(second_token),
+        json={"target_port": 8080},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "BRIDGE_NOT_FOUND"
+
+
+def test_delete_bridge_removes_bridge(client: TestClient) -> None:
+    token = register_and_login(client, "user@example.com")
+    bridge_id = create_bridge(client, token).json()["id"]
+
+    response = client.delete(f"/_v4nex/bridges/{bridge_id}", headers=auth_headers(token))
+
+    assert response.status_code == 204
+    detail = client.get(f"/_v4nex/bridges/{bridge_id}", headers=auth_headers(token))
+    assert detail.status_code == 404
+    assert detail.json()["error"]["code"] == "BRIDGE_NOT_FOUND"
+
+
+def test_delete_active_bridge_is_blocked(client: TestClient) -> None:
+    token = register_and_login(client, "user@example.com")
+    bridge_id = create_bridge(client, token).json()["id"]
+    set_bridge_status(bridge_id, BridgeStatus.ACTIVE)
+
+    response = client.delete(f"/_v4nex/bridges/{bridge_id}", headers=auth_headers(token))
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "INVALID_STATE_TRANSITION"
+
+
+def test_delete_other_users_bridge_returns_not_found(client: TestClient) -> None:
+    first_token = register_and_login(client, "first@example.com")
+    second_token = register_and_login(client, "second@example.com")
+    bridge_id = create_bridge(client, first_token, subdomain="first").json()["id"]
+
+    response = client.delete(f"/_v4nex/bridges/{bridge_id}", headers=auth_headers(second_token))
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "BRIDGE_NOT_FOUND"
 
 
 def test_validate_without_token_fails_401(client: TestClient) -> None:
