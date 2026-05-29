@@ -35,15 +35,16 @@ No existe workflow de deploy real en esta iteración.
 
 ## Variables y secretos requeridos
 
-Los siguientes nombres deben configurarse en GitHub Environment `production`, sin valores dentro del repositorio:
+Environment variables:
+- PROD_SSH_HOST
+- PROD_SSH_USER
+- PROD_APP_PATH
+- PROD_SSH_PORT
 
-- `PROD_SSH_HOST`
-- `PROD_SSH_USER`
-- `PROD_SSH_PRIVATE_KEY`
-- `PROD_APP_PATH`
-- `PROD_SSH_PORT`
+Environment secret:
+- PROD_SSH_PRIVATE_KEY
 
-Los secretos internos de la aplicación y del runtime permanecen en la VPS. No deben copiarse al repositorio ni imprimirse en logs.
+Los valores no sensibles de conexión SSH se manejan como Environment variables para evitar masking innecesario en logs. La clave privada SSH permanece como Environment secret.
 
 ## Environment production
 

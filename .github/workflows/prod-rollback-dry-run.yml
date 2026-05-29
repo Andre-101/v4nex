@@ -1,4 +1,4 @@
-name: prod-rollback-dry-run
+﻿name: prod-rollback-dry-run
 
 on:
   workflow_dispatch:
@@ -23,11 +23,11 @@ jobs:
     timeout-minutes: 20
     env:
       EXPECTED_CONFIRMATION: RUN_PROD_ROLLBACK_DRY_RUN
-      PROD_SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
-      PROD_SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      PROD_SSH_HOST: ${{ vars.PROD_SSH_HOST }}
+      PROD_SSH_USER: ${{ vars.PROD_SSH_USER }}
       PROD_SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
-      PROD_APP_PATH: ${{ secrets.PROD_APP_PATH }}
-      PROD_SSH_PORT: ${{ secrets.PROD_SSH_PORT }}
+      PROD_APP_PATH: ${{ vars.PROD_APP_PATH }}
+      PROD_SSH_PORT: ${{ vars.PROD_SSH_PORT }}
       REMOTE_COMMAND: V4NEX_DRY_RUN=1 scripts/prod/v4nex-rollback.sh
     steps:
       - name: Validate manual confirmation
@@ -92,3 +92,5 @@ jobs:
             echo "- Trigger: workflow_dispatch"
             echo "- Rollback real: no"
           } >> "$GITHUB_STEP_SUMMARY"
+
+
