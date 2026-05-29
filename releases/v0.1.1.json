@@ -59,12 +59,28 @@
       "CADDY_ACME_EMAIL"
     ]
   },
+  "variables": {
+    "new_variables": [],
+    "changed_variables": [],
+    "non_secret": {
+      "BACKEND_IMAGE_TAG": "scenario-37-bridge-management-api-r2",
+      "FRONTEND_IMAGE_TAG": "scenario-37-bridge-management-ui",
+      "CADDY_IMAGE_TAG": "scenario-21-scratch-clean",
+      "ALLOWED_TARGET_PORTS": "80,8080"
+    },
+    "sensitive_names_only": [
+      "JWT_SECRET",
+      "POSTGRES_PASSWORD",
+      "CLOUDFLARE_API_TOKEN",
+      "CADDY_ACME_EMAIL"
+    ]
+  },
   "deployment": {
-    "services_to_recreate": [
+    "recreate": [
       "backend",
       "frontend"
     ],
-    "services_not_to_recreate": [
+    "do_not_recreate": [
       "db",
       "caddy"
     ],
@@ -73,6 +89,14 @@
       "caddy"
     ],
     "requires_manual_approval": [
+      "db",
+      "caddy"
+    ],
+    "services_to_recreate": [
+      "backend",
+      "frontend"
+    ],
+    "services_not_to_recreate": [
       "db",
       "caddy"
     ]
