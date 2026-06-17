@@ -29,6 +29,11 @@ def get_current_user(
             code=ErrorCode.UNAUTHORIZED,
             message="Bearer token user was not found.",
         )
+    if not user.is_active:
+        raise AppError(
+            code=ErrorCode.USER_INACTIVE,
+            message="User account is suspended.",
+        )
 
     return user
 

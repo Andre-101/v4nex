@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 from app.db.session import SessionLocal
 from app.domain.bridge_status import BridgeStatus
 from app.models.bridge import Bridge
+from app.models.user import User
 from app.core.config import settings
 from app.services.caddy_activation import CaddyActivationResult
 from app.services.tcp_validator import TcpValidationResult
@@ -22,14 +23,22 @@ def register_and_login(client: TestClient, email: str) -> str:
         json={"email": email, "password": password},
     )
     assert response.status_code == 200
+    set_user_bridge_limit(email, 5)
     return response.json()["access_token"]
+
+
+def set_user_bridge_limit(email: str, limit: int) -> None:
+    with SessionLocal() as db:
+        user = db.query(User).filter_by(email=email).one()
+        user.bridge_limit = limit
+        db.commit()
 
 
 def auth_headers(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-def create_bridge(client: TestClient, token: str, subdomain: str = "demo"):
+def create_bridge(client: TestClient, token: str, subdomain: str = "sample"):
     return client.post(
         "/_v4nex/bridges",
         headers=auth_headers(token),
@@ -64,7 +73,7 @@ def test_create_bridge_without_token_fails_401(client: TestClient) -> None:
     response = client.post(
         "/_v4nex/bridges",
         json={
-            "subdomain": "demo",
+            "subdomain": "sample",
             "target_ipv6": "2606:4700:4700::1111",
             "target_port": 80,
         },
@@ -81,7 +90,7 @@ def test_create_bridge_with_valid_token_returns_draft(client: TestClient) -> Non
 
     assert response.status_code == 201
     assert response.json()["status"] == "DRAFT"
-    assert response.json()["subdomain"] == "demo"
+    assert response.json()["subdomain"] == "sample"
 
 
 def test_create_bridge_with_port_8080_returns_draft(client: TestClient) -> None:
@@ -91,7 +100,7 @@ def test_create_bridge_with_port_8080_returns_draft(client: TestClient) -> None:
         "/_v4nex/bridges",
         headers=auth_headers(token),
         json={
-            "subdomain": "demo",
+            "subdomain": "sample",
             "target_ipv6": "2606:4700:4700::1111",
             "target_port": 8080,
         },
@@ -108,7 +117,7 @@ def test_create_bridge_builds_public_url(client: TestClient) -> None:
     response = create_bridge(client, token)
 
     assert response.status_code == 201
-    assert response.json()["public_url"] == "https://demo.v4nex.com"
+    assert response.json()["public_url"] == "https://sample.v4nex.com"
 
 
 def test_create_bridge_with_reserved_subdomain_fails(client: TestClient) -> None:
@@ -126,7 +135,7 @@ def test_create_bridge_with_invalid_ipv6_fails(client: TestClient) -> None:
     response = client.post(
         "/_v4nex/bridges",
         headers=auth_headers(token),
-        json={"subdomain": "demo", "target_ipv6": "not-ipv6", "target_port": 80},
+        json={"subdomain": "sample", "target_ipv6": "not-ipv6", "target_port": 80},
     )
 
     assert response.status_code == 422
@@ -140,7 +149,7 @@ def test_create_bridge_with_port_22_fails(client: TestClient) -> None:
         "/_v4nex/bridges",
         headers=auth_headers(token),
         json={
-            "subdomain": "demo",
+            "subdomain": "sample",
             "target_ipv6": "2606:4700:4700::1111",
             "target_port": 22,
         },
@@ -164,30 +173,31 @@ def test_create_bridge_with_duplicate_subdomain_fails(client: TestClient) -> Non
     assert response.json()["error"]["code"] == "SUBDOMAIN_ALREADY_EXISTS"
 
 
-def test_bridge_quota_allows_until_limit(client: TestClient, monkeypatch) -> None:
-    monkeypatch.setattr(settings, "max_bridges_per_user", 2)
+def test_bridge_quota_allows_until_limit(client: TestClient) -> None:
     token = register_and_login(client, "user@example.com")
+    set_user_bridge_limit("user@example.com", 2)
 
     assert create_bridge(client, token, subdomain="first").status_code == 201
     assert create_bridge(client, token, subdomain="second").status_code == 201
 
 
-def test_bridge_quota_blocks_additional_bridge(client: TestClient, monkeypatch) -> None:
-    monkeypatch.setattr(settings, "max_bridges_per_user", 2)
+def test_bridge_quota_blocks_additional_bridge(client: TestClient) -> None:
     token = register_and_login(client, "user@example.com")
+    set_user_bridge_limit("user@example.com", 2)
     assert create_bridge(client, token, subdomain="first").status_code == 201
     assert create_bridge(client, token, subdomain="second").status_code == 201
 
     response = create_bridge(client, token, subdomain="third")
 
     assert response.status_code == 409
-    assert response.json()["error"]["code"] == "BRIDGE_QUOTA_EXCEEDED"
+    assert response.json()["error"]["code"] == "BRIDGE_LIMIT_REACHED"
 
 
-def test_bridge_quota_is_per_user(client: TestClient, monkeypatch) -> None:
-    monkeypatch.setattr(settings, "max_bridges_per_user", 1)
+def test_bridge_quota_is_per_user(client: TestClient) -> None:
     first_token = register_and_login(client, "first@example.com")
     second_token = register_and_login(client, "second@example.com")
+    set_user_bridge_limit("first@example.com", 1)
+    set_user_bridge_limit("second@example.com", 1)
     assert create_bridge(client, first_token, subdomain="first").status_code == 201
 
     response = create_bridge(client, second_token, subdomain="second")

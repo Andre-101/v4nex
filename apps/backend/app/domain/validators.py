@@ -10,25 +10,65 @@ RESERVED_SUBDOMAINS: frozenset[str] = frozenset(
         "www",
         "api",
         "admin",
+        "app",
         "panel",
         "login",
+        "signup",
+        "register",
+        "auth",
+        "oauth",
+        "sso",
         "dashboard",
         "status",
+        "health",
         "mail",
         "smtp",
+        "imap",
+        "pop",
         "ftp",
         "ssh",
+        "vpn",
+        "ns1",
+        "ns2",
+        "dns",
+        "cdn",
+        "static",
+        "assets",
         "root",
         "support",
+        "help",
         "billing",
+        "payments",
+        "pay",
+        "abuse",
+        "security",
+        "legal",
+        "terms",
+        "privacy",
+        "grafana",
+        "prometheus",
+        "metrics",
+        "logs",
+        "monitoring",
+        "caddy",
+        "db",
+        "postgres",
+        "backend",
+        "frontend",
+        "localhost",
         "docs",
         "dev",
         "test",
+        "staging",
+        "prod",
+        "production",
+        "demo",
         "_v4nex",
+        "v4nex",
     }
 )
 
-SUBDOMAIN_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,38}[a-z0-9])$")
+SUBDOMAIN_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])$")
 DOCUMENTATION_IPV6_NETWORK = ipaddress.ip_network("2001:db8::/32")
 DEFAULT_ALLOWED_TARGET_PORTS = frozenset({80, 8080})
 
@@ -45,7 +85,7 @@ def validate_subdomain(subdomain: str) -> str:
         raise AppError(
             code=ErrorCode.INVALID_SUBDOMAIN,
             message=(
-                "Subdomain must be 3 to 40 characters and use only lowercase "
+                "Subdomain must be 3 to 63 characters and use only lowercase "
                 "letters, numbers, and hyphens. It cannot start or end with a hyphen."
             ),
             details={"subdomain": subdomain},

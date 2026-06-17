@@ -21,6 +21,11 @@ def register_and_login(client: TestClient, email: str = "admin@example.com") -> 
         json={"email": email, "password": password},
     )
     assert response.status_code == 200
+    with SessionLocal() as db:
+        user = db.scalar(select(User).where(User.email == email))
+        assert user is not None
+        user.bridge_limit = 5
+        db.commit()
     return response.json()["access_token"]
 
 

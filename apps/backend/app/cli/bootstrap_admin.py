@@ -9,6 +9,7 @@ from app.core.security import hash_password
 from app.db.session import SessionLocal
 from app.domain.user_role import UserRole
 from app.models.user import User
+from app.services.audit import add_audit_event
 
 
 class BootstrapAdminError(RuntimeError):
@@ -36,6 +37,14 @@ def bootstrap_admin(db: Session, email: str, password: str | None = None) -> Boo
     if user is not None:
         if user.role != UserRole.ADMIN.value:
             user.role = UserRole.ADMIN.value
+            user.is_active = True
+            add_audit_event(
+                db,
+                actor=user,
+                target_user_id=user.id,
+                action="USER_PROMOTED_ADMIN",
+                message="User promoted to ADMIN by bootstrap CLI.",
+            )
             db.commit()
             db.refresh(user)
             return BootstrapAdminResult("promoted", user.email, user.id)
@@ -48,8 +57,18 @@ def bootstrap_admin(db: Session, email: str, password: str | None = None) -> Boo
         email=normalized_email,
         password_hash=hash_password(password),
         role=UserRole.ADMIN.value,
+        bridge_limit=1,
+        is_active=True,
     )
     db.add(user)
+    db.flush()
+    add_audit_event(
+        db,
+        actor=user,
+        target_user_id=user.id,
+        action="USER_PROMOTED_ADMIN",
+        message="Admin user created by bootstrap CLI.",
+    )
     db.commit()
     db.refresh(user)
     return BootstrapAdminResult("created", user.email, user.id)
