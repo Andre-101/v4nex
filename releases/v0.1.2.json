@@ -1,0 +1,282 @@
+{
+  "schema_version": "1.0",
+  "release_id": "v4nex-v0.1.2",
+  "version": "v0.1.2",
+  "created_at": "2026-06-17T03:12:13-05:00",
+  "environment": "production",
+  "release_type": "functional-controlled",
+  "status": "pending-infra-approval",
+  "parent_release": "v0.1.1",
+  "source_branch": "feat/v0.1.2-admin-quota",
+  "source_merge_commit": null,
+  "approved_by_app": true,
+  "approved_by_infra": false,
+  "components": {
+    "backend": {
+      "image": "ghcr.io/andre-101/v4nex-backend",
+      "tag": "v0.1.2-admin-quota-r1",
+      "digest": "sha256:c95841cdb83ce33a01f348b86f6c137cc107ac65f2c00430f28e0d71c5e98448",
+      "required": true,
+      "requires_recreate": true,
+      "recreate_policy": "recreate"
+    },
+    "frontend": {
+      "image": "ghcr.io/andre-101/v4nex-frontend",
+      "tag": "v0.1.2-admin-quota-r1",
+      "digest": "sha256:84124e25bb4f57fc70446eaeddbe523cba384b7aa6251e84ca3898d0b0844d3a",
+      "required": true,
+      "requires_recreate": true,
+      "recreate_policy": "recreate"
+    },
+    "caddy": {
+      "image": "ghcr.io/andre-101/v4nex-caddy-cloudflare",
+      "tag": "scenario-21-scratch-clean",
+      "digest": "sha256:5b5cad98d400e6f5ae44d45befbdf91dd00b53be429687a8e4ad086322498ed6",
+      "required": true,
+      "requires_recreate": false,
+      "recreate_policy": "no_recreate_unless_drift_or_manual_approval"
+    }
+  },
+  "platform": {
+    "platform_mode": "closed_temporarily"
+  },
+  "migrations": {
+    "required": true,
+    "alembic_required": true,
+    "alembic_command": "alembic upgrade head",
+    "revision": "202606170001",
+    "down_revision": "202605260002",
+    "migration_file": "apps/backend/alembic/versions/202606170001_user_quota_admin_audit.py",
+    "migration_risk": "low",
+    "rollback_requires_db_restore": false,
+    "changes": [
+      "add users.bridge_limit with existing users defaulted to 1",
+      "add users.is_active with existing users defaulted to true",
+      "allow admin_audit_events.actor_user_id to be nullable",
+      "add admin_audit_events.target_user_id",
+      "add admin_audit_events.bridge_id",
+      "add indexes and foreign keys for admin audit targets"
+    ],
+    "data_deletion": false,
+    "downgrade_available": true,
+    "downgrade_notes": "Downgrade drops v0.1.2 audit target columns and user quota/status columns. DB restore is preferred if production data must be preserved exactly."
+  },
+  "env": {
+    "new_variables": [],
+    "changed_variables": [],
+    "non_secret": {
+      "BACKEND_IMAGE_TAG": "v0.1.2-admin-quota-r1",
+      "FRONTEND_IMAGE_TAG": "v0.1.2-admin-quota-r1",
+      "CADDY_IMAGE_TAG": "scenario-21-scratch-clean",
+      "ALLOWED_TARGET_PORTS": "80,8080"
+    },
+    "sensitive_names_only": [
+      "JWT_SECRET",
+      "POSTGRES_PASSWORD",
+      "CLOUDFLARE_API_TOKEN",
+      "CADDY_ACME_EMAIL"
+    ]
+  },
+  "variables": {
+    "new_variables": [],
+    "changed_variables": [],
+    "non_secret": {
+      "BACKEND_IMAGE_TAG": "v0.1.2-admin-quota-r1",
+      "FRONTEND_IMAGE_TAG": "v0.1.2-admin-quota-r1",
+      "CADDY_IMAGE_TAG": "scenario-21-scratch-clean",
+      "ALLOWED_TARGET_PORTS": "80,8080"
+    },
+    "sensitive_names_only": [
+      "JWT_SECRET",
+      "POSTGRES_PASSWORD",
+      "CLOUDFLARE_API_TOKEN",
+      "CADDY_ACME_EMAIL"
+    ]
+  },
+  "deployment": {
+    "recreate": [
+      "backend",
+      "frontend"
+    ],
+    "do_not_recreate": [
+      "db",
+      "caddy"
+    ],
+    "validate_only": [
+      "caddy"
+    ],
+    "requires_manual_approval": [
+      "db",
+      "caddy"
+    ],
+    "services_to_recreate": [
+      "backend",
+      "frontend"
+    ],
+    "services_not_to_recreate": [
+      "db",
+      "caddy"
+    ]
+  },
+  "protected_resources": [
+    ".env.production",
+    "docker-compose.prod.yml",
+    "infra/caddy/Caddyfile.prod",
+    "app_postgres_data",
+    "app_caddy_data",
+    "app_caddy_config"
+  ],
+  "preflight": [
+    "app_base_path_exists",
+    "env_file_exists",
+    "env_file_permissions_600",
+    "docker_available",
+    "compose_config_valid",
+    "required_env_keys_present",
+    "ghcr_pull_available",
+    "digests_match",
+    "alembic_head_available",
+    "docker_ipv6_networks_enabled",
+    "app_control_ipv6_enabled",
+    "app_edge_ipv6_enabled",
+    "caddyfile_base_exists",
+    "protected_ports_not_published",
+    "caddy_admin_not_public",
+    "caddy_healthy",
+    "backend_healthy",
+    "frontend_healthy",
+    "db_healthy",
+    "critical_volumes_exist"
+  ],
+  "smoke_minimal": [
+    "compose_config_valid",
+    "services_healthy",
+    "health_ok",
+    "v4nex_health_ok",
+    "protected_ports_not_published",
+    "platform_mode_behavior_ok",
+    "auth_me_ok",
+    "bridge_list_ok",
+    "admin_requires_admin_ok"
+  ],
+  "smoke_extended": {
+    "authorized_by_default": false,
+    "checks": [
+      "login_ok",
+      "admin_user_list_ok",
+      "admin_user_bridge_limit_update_ok",
+      "user_quota_enforced_ok",
+      "admin_user_suspend_ok",
+      "inactive_user_blocked_ok",
+      "admin_user_unsuspend_ok",
+      "bridge_create_draft_ok",
+      "bridge_detail_ok",
+      "bridge_validate_ok",
+      "bridge_ready_confirmed",
+      "bridge_activate_ok",
+      "bridge_active_confirmed",
+      "admin_bridge_disable_ok",
+      "bridge_public_url_ok",
+      "platform_still_ok_after_actions",
+      "internal_ports_not_published"
+    ]
+  },
+  "scan_summary": {
+    "backend": {
+      "critical": 0,
+      "high": 0,
+      "medium": 0,
+      "low": 0,
+      "status": "clean"
+    },
+    "frontend": {
+      "critical": 0,
+      "high": 0,
+      "medium": 0,
+      "low": 0,
+      "status": "clean"
+    },
+    "frontend_npm_audit": {
+      "critical": 0,
+      "high": 0,
+      "moderate": 1,
+      "low": 0,
+      "runtime_image_affected": false,
+      "status": "dev_build_dependency_pending"
+    }
+  },
+  "rollback": {
+    "previous_backend_tag": "scenario-37-bridge-management-api-r2",
+    "previous_backend_digest": "sha256:15f02fe0857545a01299d0590b40e91ed4fed5de90130579ecd33be15b415f08",
+    "previous_frontend_tag": "scenario-37-bridge-management-ui",
+    "previous_frontend_digest": "sha256:49582abd3db4e132f887acd380cd6300cf6b6b5a8cf9a8eab5c6dc2c6bdff204",
+    "previous_caddy_tag": "scenario-21-scratch-clean",
+    "previous_caddy_digest": "sha256:5b5cad98d400e6f5ae44d45befbdf91dd00b53be429687a8e4ad086322498ed6",
+    "rollback_services": [
+      "backend",
+      "frontend"
+    ],
+    "rollback_env_keys": [
+      "BACKEND_IMAGE_TAG",
+      "FRONTEND_IMAGE_TAG"
+    ],
+    "rollback_requires_db_restore": false,
+    "rollback_requires_caddy_restore": false,
+    "rollback_max_time_minutes": 10,
+    "db_rollback_policy": "no_rollback_without_backup_restore_plan",
+    "caddy_rollback_policy": "no_rollback_unless_manual_approval",
+    "rollback_validation": [
+      "health_ok",
+      "v4nex_health_ok",
+      "caddy_healthy",
+      "backend_healthy",
+      "frontend_healthy",
+      "db_healthy",
+      "internal_ports_not_published"
+    ]
+  },
+  "restrictions": {
+    "no_latest": true,
+    "no_dns_changes": true,
+    "no_acme_repeat": true,
+    "no_down_v": true,
+    "no_volume_deletion": true,
+    "no_caddyfile_base_change": true,
+    "no_env_overwrite": true,
+    "no_publish_internal_ports": true
+  },
+  "go_criteria": [
+    "release_manifest_valid",
+    "no_latest_image_tags",
+    "no_secrets_in_manifest",
+    "required_digests_present",
+    "docker_compose_config_valid",
+    "env_file_protected",
+    "alembic_upgrade_successful",
+    "docker_ipv6_networks_enabled",
+    "internal_ports_not_published",
+    "platform_health_ok",
+    "backend_recreated_successfully",
+    "frontend_recreated_successfully",
+    "smoke_minimal_ok",
+    "backend_scan_clean",
+    "frontend_scan_clean"
+  ],
+  "no_go_criteria": [
+    "manifest_invalid",
+    "latest_image_tag_detected",
+    "secret_value_detected",
+    "missing_required_digest",
+    "docker_compose_config_failed",
+    "env_file_missing_or_unprotected",
+    "alembic_upgrade_failed",
+    "docker_ipv6_networks_missing",
+    "internal_port_published",
+    "platform_health_failed",
+    "backend_or_frontend_recreate_failed",
+    "smoke_minimal_failed",
+    "backend_or_frontend_critical_high_vulnerability_detected",
+    "manual_dns_or_acme_required",
+    "volume_deletion_required"
+  ]
+}

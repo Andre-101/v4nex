@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import DateTime, String
+from sqlalchemy import Boolean, DateTime, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -16,6 +16,8 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[str] = mapped_column(String(32), default=UserRole.USER.value, nullable=False)
+    bridge_limit: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
@@ -25,4 +27,8 @@ class User(Base):
     )
 
     bridges = relationship("Bridge", back_populates="user", cascade="all, delete-orphan")
-    admin_audit_events = relationship("AdminAuditEvent", back_populates="actor_user")
+    admin_audit_events = relationship(
+        "AdminAuditEvent",
+        back_populates="actor_user",
+        foreign_keys="AdminAuditEvent.actor_user_id",
+    )

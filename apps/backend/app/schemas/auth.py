@@ -9,6 +9,13 @@ class RegisterRequest(BaseModel):
 class UserResponse(BaseModel):
     id: str
     email: str
+    role: str = "USER"
+    bridge_limit: int = 1
+    is_active: bool = True
+
+
+class CurrentUserResponse(UserResponse):
+    bridges_used: int
 
 
 class LoginRequest(BaseModel):

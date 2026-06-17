@@ -1,7 +1,8 @@
 import { FormEvent, useEffect, useMemo, useState } from "react"
 
 type BridgeStatus = "DRAFT" | "VALIDATING" | "READY" | "ACTIVE" | "ERROR" | "DISABLED" | "SUSPENDED"
-type View = "overview" | "bridges" | "detail" | "new" | "edit"
+type View = "overview" | "bridges" | "detail" | "new" | "edit" | "admin"
+type AdminView = "users" | "bridges"
 
 type Bridge = {
   id: string
@@ -12,6 +13,31 @@ type Bridge = {
   status: BridgeStatus
   last_tcp_validation_result?: string | null
   last_heartbeat_result?: string | null
+}
+
+type CurrentUser = {
+  id: string
+  email: string
+  role: "USER" | "ADMIN"
+  bridge_limit: number
+  is_active: boolean
+  bridges_used: number
+}
+
+type AdminUser = {
+  id: string
+  email: string
+  role: "USER" | "ADMIN"
+  is_active: boolean
+  bridge_limit: number
+  bridges_used: number
+  created_at: string
+  updated_at: string
+}
+
+type AdminBridge = Bridge & {
+  user_id: string
+  owner_email: string
 }
 
 type ApiError = {
@@ -31,7 +57,10 @@ type BridgeForm = {
 const endpoints = {
   register: "/_v4nex/auth/register",
   login: "/_v4nex/auth/login",
+  me: "/_v4nex/auth/me",
   bridges: "/_v4nex/bridges",
+  adminUsers: "/_v4nex/admin/users",
+  adminBridges: "/_v4nex/admin/bridges",
 }
 
 const allowedPorts = [80, 8080]
@@ -43,6 +72,13 @@ function isPreviewAllowed() {
   if (typeof window === "undefined") return false
   const host = window.location.hostname
   return [String.raw`local` + String.raw`host`, "127.0.0.1", "::1"].includes(host)
+}
+
+function isBridgeHostWithoutPanel() {
+  if (typeof window === "undefined") return false
+  const host = window.location.hostname.toLowerCase()
+  if (host === "v4nex.com" || isPreviewAllowed()) return false
+  return host.endsWith(".v4nex.com")
 }
 
 function isPreviewSession() {
@@ -70,6 +106,18 @@ function getPreviewBridges(): Bridge[] {
       last_tcp_validation_result: null,
     },
   ]
+}
+
+function getPreviewUser(): CurrentUser {
+  const bridges = getPreviewBridges()
+  return {
+    id: "preview-user",
+    email: "preview@v4nex.local",
+    role: "ADMIN",
+    bridge_limit: 3,
+    is_active: true,
+    bridges_used: bridges.length,
+  }
 }
 
 function isNetworkError(error: unknown) {
@@ -151,10 +199,25 @@ function canDisable(status: BridgeStatus) {
   return status === "ACTIVE"
 }
 
+function BridgeNotFoundPage() {
+  return (
+    <main className="app">
+      <section className="panel">
+        <h1>Bridge no encontrado</h1>
+        <p>Este subdominio no tiene un bridge activo o el servicio fue desactivado.</p>
+        <a className="button-link" href="https://v4nex.com">
+          Ir a v4nex
+        </a>
+      </section>
+    </main>
+  )
+}
+
 function App() {
   const [token, setToken] = useState(getInitialToken)
   const [email, setEmail] = useState(getInitialEmail)
   const [isPreview, setIsPreview] = useState(isPreviewSession)
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(isPreviewSession() ? getPreviewUser() : null)
   const [authMode, setAuthMode] = useState<"login" | "register">("login")
   const [authEmail, setAuthEmail] = useState("")
   const [password, setPassword] = useState("")
@@ -168,8 +231,13 @@ function App() {
   const [message, setMessage] = useState("")
   const [error, setError] = useState("")
   const [runningActionId, setRunningActionId] = useState("")
+  const [adminView, setAdminView] = useState<AdminView>("users")
+  const [adminUsers, setAdminUsers] = useState<AdminUser[]>([])
+  const [adminBridges, setAdminBridges] = useState<AdminBridge[]>([])
 
   const isAuthenticated = Boolean(token)
+  const isAdmin = currentUser?.role === "ADMIN"
+  const bridgeLimitReached = Boolean(currentUser && currentUser.bridges_used >= currentUser.bridge_limit)
   const selectedBridge = bridges.find((bridge) => bridge.id === selectedBridgeId) ?? null
   const totals = useMemo(
     () => ({
@@ -192,8 +260,31 @@ function App() {
     return true
   }
 
+  async function loadCurrentUser() {
+    if (!token) return null
+    if (isPreview) {
+      const previewUser = { ...getPreviewUser(), bridges_used: bridges.length }
+      setCurrentUser(previewUser)
+      return previewUser
+    }
+
+    const data = await parseResponse<CurrentUser>(
+      await fetch(endpoints.me, {
+        headers: { Authorization: `Bearer ${token}` },
+      }),
+      "No pudimos cargar tu sesiÃ³n.",
+    )
+    setCurrentUser(data)
+    setEmail(data.email)
+    return data
+  }
+
   async function loadBridges() {
-    if (!token || isPreview) return
+    if (!token) return
+    if (isPreview) {
+      setCurrentUser((user) => (user ? { ...user, bridges_used: bridges.length } : getPreviewUser()))
+      return
+    }
 
     setLoading(true)
     setError("")
@@ -205,6 +296,7 @@ function App() {
         "No pudimos cargar los bridges.",
       )
       setBridges(data)
+      setCurrentUser((user) => (user ? { ...user, bridges_used: data.length } : user))
     } catch (errorValue) {
       if (handleSessionExpired(errorValue)) return
       setError(isNetworkError(errorValue) ? networkErrorMessage() : "No pudimos cargar los bridges.")
@@ -226,8 +318,44 @@ function App() {
     return data
   }
 
+  async function loadAdminData() {
+    if (!token || !isAdmin) return
+    if (isPreview) {
+      setAdminUsers([
+        { ...getPreviewUser(), created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+      ])
+      setAdminBridges(
+        bridges.map((bridge) => ({
+          ...bridge,
+          user_id: "preview-user",
+          owner_email: "preview@v4nex.local",
+        })),
+      )
+      return
+    }
+
+    const [users, globalBridges] = await Promise.all([
+      parseResponse<AdminUser[]>(
+        await fetch(endpoints.adminUsers, { headers: { Authorization: `Bearer ${token}` } }),
+        "No pudimos cargar usuarios.",
+      ),
+      parseResponse<AdminBridge[]>(
+        await fetch(endpoints.adminBridges, { headers: { Authorization: `Bearer ${token}` } }),
+        "No pudimos cargar bridges globales.",
+      ),
+    ])
+    setAdminUsers(users)
+    setAdminBridges(globalBridges)
+  }
+
   useEffect(() => {
-    void loadBridges()
+    if (!token) return
+    void loadCurrentUser()
+      .then(() => loadBridges())
+      .catch((errorValue) => {
+        if (handleSessionExpired(errorValue)) return
+        setError(isNetworkError(errorValue) ? networkErrorMessage() : "No pudimos cargar tu sesiÃ³n.")
+      })
   }, [token, isPreview])
 
   async function submitAuth(event: FormEvent<HTMLFormElement>) {
@@ -264,6 +392,7 @@ function App() {
       sessionStorage.removeItem("v4nex_preview_session")
       setToken(data.access_token)
       setEmail(authEmail)
+      setCurrentUser(null)
       setIsPreview(false)
       setPassword("")
       setView("overview")
@@ -283,6 +412,7 @@ function App() {
     sessionStorage.removeItem("v4nex_user_email")
     setToken("local-preview-token")
     setEmail("preview@v4nex.local")
+    setCurrentUser(getPreviewUser())
     setIsPreview(true)
     setBridges(getPreviewBridges())
     setView("overview")
@@ -296,8 +426,11 @@ function App() {
     sessionStorage.removeItem("v4nex_preview_session")
     setToken("")
     setEmail("")
+    setCurrentUser(null)
     setIsPreview(false)
     setBridges([])
+    setAdminUsers([])
+    setAdminBridges([])
     setSelectedBridgeId("")
     setBridgeForm(emptyForm)
     setView("overview")
@@ -332,6 +465,10 @@ function App() {
 
   function openNew() {
     clearNotices()
+    if (bridgeLimitReached) {
+      setError("Alcanzaste el lÃ­mite de bridges de tu cuenta.")
+      return
+    }
     setBridgeForm(emptyForm)
     setView("new")
   }
@@ -342,6 +479,11 @@ function App() {
 
     if (!allowedPorts.includes(bridgeForm.target_port)) {
       setError("Este puerto no está permitido. Actualmente se permiten 80 y 8080.")
+      return
+    }
+
+    if (bridgeLimitReached) {
+      setError("Alcanzaste el limite de bridges de tu cuenta.")
       return
     }
 
@@ -533,6 +675,88 @@ function App() {
     return "No pudimos desactivar el bridge."
   }
 
+  async function adminPatchUser(user: AdminUser, payload: Partial<Pick<AdminUser, "bridge_limit" | "is_active">>) {
+    clearNotices()
+    if (isPreview) {
+      setAdminUsers((current) => current.map((item) => (item.id === user.id ? { ...item, ...payload } : item)))
+      setMessage("Usuario actualizado.")
+      return
+    }
+    try {
+      await parseResponse<AdminUser>(
+        await fetch(`${endpoints.adminUsers}/${user.id}`, {
+          method: "PATCH",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        }),
+        "No pudimos actualizar el usuario.",
+      )
+      setMessage("Usuario actualizado.")
+      await loadAdminData()
+    } catch (errorValue) {
+      if (handleSessionExpired(errorValue)) return
+      setError(errorValue instanceof Error ? errorValue.message : "No pudimos actualizar el usuario.")
+    }
+  }
+
+  async function adminDeleteUser(user: AdminUser) {
+    clearNotices()
+    if (isPreview) {
+      setAdminUsers((current) => current.filter((item) => item.id !== user.id))
+      setMessage("Usuario eliminado.")
+      return
+    }
+    try {
+      const response = await fetch(`${endpoints.adminUsers}/${user.id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (response.status === 401) throw new SessionExpiredError("Tu sesión expiró. Inicia sesión nuevamente.")
+      if (!response.ok) {
+        const body = (await response.json().catch(() => ({}))) as ApiError
+        throw new Error(friendlyError(body, "No pudimos eliminar el usuario."))
+      }
+      setMessage("Usuario eliminado.")
+      await loadAdminData()
+    } catch (errorValue) {
+      if (handleSessionExpired(errorValue)) return
+      setError(errorValue instanceof Error ? errorValue.message : "No pudimos eliminar el usuario.")
+    }
+  }
+
+  async function adminBridgeAction(bridge: AdminBridge, action: "disable" | "delete") {
+    clearNotices()
+    if (isPreview) {
+      setAdminBridges((current) =>
+        action === "delete"
+          ? current.filter((item) => item.id !== bridge.id)
+          : current.map((item) => (item.id === bridge.id ? { ...item, status: "DISABLED" } : item)),
+      )
+      setMessage(action === "delete" ? "Bridge eliminado." : "Bridge desactivado.")
+      return
+    }
+    try {
+      const response = await fetch(`${endpoints.adminBridges}/${bridge.id}${action === "disable" ? "/disable" : ""}`, {
+        method: action === "disable" ? "POST" : "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (response.status === 401) throw new SessionExpiredError("Tu sesión expiró. Inicia sesión nuevamente.")
+      if (!response.ok) {
+        const body = (await response.json().catch(() => ({}))) as ApiError
+        throw new Error(friendlyError(body, action === "delete" ? "No pudimos eliminar el bridge." : "No pudimos desactivar el bridge."))
+      }
+      setMessage(action === "delete" ? "Bridge eliminado." : "Bridge desactivado.")
+      await loadAdminData()
+      await loadBridges()
+    } catch (errorValue) {
+      if (handleSessionExpired(errorValue)) return
+      setError(errorValue instanceof Error ? errorValue.message : "No pudimos completar la acción admin.")
+    }
+  }
+
   function renderActions(bridge: Bridge) {
     return (
       <div className="actions">
@@ -594,6 +818,10 @@ function App() {
         <button type="submit">{submitText}</button>
       </form>
     )
+  }
+
+  if (isBridgeHostWithoutPanel()) {
+    return <BridgeNotFoundPage />
   }
 
   if (!isAuthenticated) {
@@ -660,9 +888,24 @@ function App() {
         <button className={view === "bridges" ? "active" : ""} type="button" onClick={() => setView("bridges")}>
           Bridges
         </button>
-        <button className={view === "new" ? "active" : ""} type="button" onClick={openNew}>
+        <button className={view === "new" ? "active" : ""} type="button" onClick={openNew} disabled={bridgeLimitReached}>
           Nuevo bridge
         </button>
+        {isAdmin && (
+          <button
+            className={view === "admin" ? "active" : ""}
+            type="button"
+            onClick={() => {
+              setView("admin")
+              void loadAdminData().catch((errorValue) => {
+                if (handleSessionExpired(errorValue)) return
+                setError(errorValue instanceof Error ? errorValue.message : "No pudimos cargar Admin.")
+              })
+            }}
+          >
+            Admin
+          </button>
+        )}
       </nav>
 
       {message && <p className="success">{message}</p>}
@@ -683,6 +926,16 @@ function App() {
             <p className="metric">{totals.active}</p>
           </div>
           <div className="panel">
+            <h2>Cupo de bridges</h2>
+            <p className="metric">
+              {currentUser?.bridges_used ?? bridges.length}/{currentUser?.bridge_limit ?? "-"}
+            </p>
+            {currentUser?.bridge_limit === 0 && <p className="error">Tu cuenta no tiene cupo disponible para crear bridges.</p>}
+            {currentUser && currentUser.bridge_limit > 0 && currentUser.bridges_used >= currentUser.bridge_limit && (
+              <p className="notice">Alcanzaste el limite de bridges de tu cuenta.</p>
+            )}
+          </div>
+          <div className="panel">
             <h2>Estado operacional</h2>
             <p>API autenticada conectada.</p>
             <p>Las rutas públicas solo son utilizables cuando el bridge está ACTIVO.</p>
@@ -698,7 +951,7 @@ function App() {
               <button className="secondary" type="button" onClick={() => void loadBridges()} disabled={loading || isPreview}>
                 {loading ? "Actualizando..." : "Actualizar"}
               </button>
-              <button type="button" onClick={openNew}>
+              <button type="button" onClick={openNew} disabled={bridgeLimitReached}>
                 Nuevo bridge
               </button>
             </div>
@@ -760,6 +1013,124 @@ function App() {
           <h2>Editar bridge</h2>
           <p className="muted">Editar subdominio, IPv6 o puerto devuelve el bridge a DRAFT.</p>
           {renderBridgeForm(submitBridgeEdit, "Guardar cambios")}
+        </section>
+      )}
+
+      {view === "admin" && isAdmin && (
+        <section className="panel">
+          <div className="section-header">
+            <div>
+              <h2>Admin</h2>
+              <p className="muted">Gestión operativa de usuarios, cuotas y bridges.</p>
+            </div>
+            <div className="actions">
+              <button className={adminView === "users" ? "active" : "secondary"} type="button" onClick={() => setAdminView("users")}>
+                Usuarios
+              </button>
+              <button className={adminView === "bridges" ? "active" : "secondary"} type="button" onClick={() => setAdminView("bridges")}>
+                Bridges globales
+              </button>
+              <button className="secondary" type="button" onClick={() => void loadAdminData()}>
+                Actualizar
+              </button>
+            </div>
+          </div>
+
+          {adminView === "users" && (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Email</th>
+                    <th>Rol</th>
+                    <th>Estado</th>
+                    <th>Bridges</th>
+                    <th>Límite</th>
+                    <th>Creado</th>
+                    <th>Acciones</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {adminUsers.map((user) => (
+                    <tr key={user.id}>
+                      <td>{user.email}</td>
+                      <td>{user.role}</td>
+                      <td>{user.is_active ? "Activo" : "Suspendido"}</td>
+                      <td>{user.bridges_used}</td>
+                      <td>{user.bridge_limit}</td>
+                      <td>{new Date(user.created_at).toLocaleDateString()}</td>
+                      <td>
+                        <div className="actions">
+                          <button type="button" onClick={() => void adminPatchUser(user, { bridge_limit: Math.max(0, user.bridge_limit + 1) })}>
+                            +1 límite
+                          </button>
+                          <button className="secondary" type="button" onClick={() => void adminPatchUser(user, { bridge_limit: 0 })}>
+                            Límite 0
+                          </button>
+                          {user.is_active ? (
+                            <button className="danger" type="button" onClick={() => void adminPatchUser(user, { is_active: false })}>
+                              Suspender
+                            </button>
+                          ) : (
+                            <button type="button" onClick={() => void adminPatchUser(user, { is_active: true })}>
+                              Reactivar
+                            </button>
+                          )}
+                          <button className="danger" type="button" onClick={() => void adminDeleteUser(user)}>
+                            Eliminar
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {adminView === "bridges" && (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Subdominio</th>
+                    <th>Estado</th>
+                    <th>IPv6 destino</th>
+                    <th>Puerto</th>
+                    <th>Owner</th>
+                    <th>URL pública</th>
+                    <th>Acciones</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {adminBridges.map((bridge) => (
+                    <tr key={bridge.id}>
+                      <td>{bridge.subdomain}</td>
+                      <td>{statusLabel(bridge.status)}</td>
+                      <td>{bridge.target_ipv6}</td>
+                      <td>{bridge.target_port}</td>
+                      <td>{bridge.owner_email}</td>
+                      <td>{bridge.public_url}</td>
+                      <td>
+                        <div className="actions">
+                          {bridge.status === "ACTIVE" && (
+                            <button type="button" onClick={() => void adminBridgeAction(bridge, "disable")}>
+                              Desactivar
+                            </button>
+                          )}
+                          {bridge.status !== "ACTIVE" && (
+                            <button className="danger" type="button" onClick={() => void adminBridgeAction(bridge, "delete")}>
+                              Eliminar
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </section>
       )}
 

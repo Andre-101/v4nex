@@ -137,7 +137,7 @@ class FakeCaddyClient:
             raise CaddyClientError("rollback failed")
 
 
-def route(subdomain: str = "demo", port: int = 80) -> CaddyBridgeRoute:
+def route(subdomain: str = "sample", port: int = 80) -> CaddyBridgeRoute:
     return CaddyBridgeRoute(
         subdomain=subdomain,
         public_domain="v4nex.com",
@@ -164,7 +164,7 @@ def catch_all_index(route_items: list[dict]) -> int:
 
 def test_build_bridge_route_rejects_malicious_subdomain() -> None:
     malicious_route = CaddyBridgeRoute(
-        subdomain="demo\nreverse_proxy evil:80",
+        subdomain="sample\nreverse_proxy evil:80",
         public_domain="v4nex.com",
         target_ipv6="2606:4700:4700::1111",
         target_port=80,
@@ -239,14 +239,14 @@ def test_inject_bridge_routes_inserts_bridge_before_wildcard_frontend_fallback()
     config = inject_bridge_routes(product_config_with_wildcard_frontend(), [route()])
     route_items = routes(config)
 
-    assert route_index_for_host(route_items, "demo.v4nex.com") < route_index_for_host(route_items, "*.v4nex.com")
+    assert route_index_for_host(route_items, "sample.v4nex.com") < route_index_for_host(route_items, "*.v4nex.com")
 
 
 def test_inject_bridge_routes_inserts_bridge_before_subroute_wildcard_frontend_fallback() -> None:
     config = inject_bridge_routes(product_config_with_subroute_wildcard_frontend(), [route()])
     route_items = routes(config)
 
-    assert route_index_for_host(route_items, "demo.v4nex.com") < route_index_for_host(route_items, "*.v4nex.com")
+    assert route_index_for_host(route_items, "sample.v4nex.com") < route_index_for_host(route_items, "*.v4nex.com")
 
 
 def test_inject_bridge_routes_preserves_required_order_before_wildcard_and_catch_all() -> None:
@@ -254,16 +254,16 @@ def test_inject_bridge_routes_preserves_required_order_before_wildcard_and_catch
     route_items = routes(config)
 
     assert route_index_for_host(route_items, "v4nex.com") == 0
-    assert route_index_for_host(route_items, "demo.v4nex.com") == 2
+    assert route_index_for_host(route_items, "sample.v4nex.com") == 2
     assert route_index_for_host(route_items, "*.v4nex.com") == 3
     assert catch_all_index(route_items) == 4
 
 
 def test_inject_bridge_routes_replaces_previous_dynamic_routes_without_duplicates() -> None:
     config = product_config()
-    config["apps"]["http"]["servers"]["public"]["routes"].insert(0, build_bridge_route(route("demo")))
+    config["apps"]["http"]["servers"]["public"]["routes"].insert(0, build_bridge_route(route("sample")))
 
-    next_config = inject_bridge_routes(config, [route("demo"), route("second", 8080)])
+    next_config = inject_bridge_routes(config, [route("sample"), route("second", 8080)])
     dynamic_routes = [
         route_item
         for route_item in routes(next_config)
@@ -272,7 +272,7 @@ def test_inject_bridge_routes_replaces_previous_dynamic_routes_without_duplicate
 
     assert len(dynamic_routes) == 2
     assert [route_item["match"][0]["host"][0] for route_item in dynamic_routes] == [
-        "demo.v4nex.com",
+        "sample.v4nex.com",
         "second.v4nex.com",
     ]
 

@@ -21,6 +21,7 @@ from app.services.caddy_activation import (
     activate_bridge_routes,
     disable_bridge_routes,
 )
+from app.services.audit import add_audit_event
 from app.services.caddy_config import CaddyBridgeRoute
 from app.services.tcp_validator import TcpValidationResult, validate_tcp_connectivity
 
@@ -196,11 +197,14 @@ def create_bridge(
     bridge_count = db.scalar(
         select(func.count()).select_from(Bridge).where(Bridge.user_id == current_user.id)
     )
-    if (bridge_count or 0) >= settings.max_bridges_per_user:
+    if (bridge_count or 0) >= current_user.bridge_limit:
         raise AppError(
-            code=ErrorCode.BRIDGE_QUOTA_EXCEEDED,
-            message="Bridge quota exceeded for this user.",
-            details={"max_bridges_per_user": settings.max_bridges_per_user},
+            code=ErrorCode.BRIDGE_LIMIT_REACHED,
+            message="Bridge limit reached for this user.",
+            details={
+                "bridge_limit": current_user.bridge_limit,
+                "bridges_used": bridge_count or 0,
+            },
         )
 
     existing_bridge = db.scalar(select(Bridge).where(Bridge.subdomain == subdomain))
@@ -230,6 +234,15 @@ def create_bridge(
             message="Bridge created in DRAFT status.",
             event_metadata={},
         )
+    )
+    add_audit_event(
+        db,
+        actor=current_user,
+        target_user_id=current_user.id,
+        bridge_id=bridge.id,
+        action="BRIDGE_CREATED",
+        message="Bridge created.",
+        metadata={"subdomain": bridge.subdomain, "target_port": bridge.target_port},
     )
     db.commit()
     db.refresh(bridge)
@@ -306,6 +319,15 @@ def update_bridge(
             message="Bridge updated and reset to DRAFT status.",
             metadata={"changed_fields": changed_fields},
         )
+        add_audit_event(
+            db,
+            actor=current_user,
+            target_user_id=current_user.id,
+            bridge_id=bridge.id,
+            action="BRIDGE_UPDATED",
+            message="Bridge updated.",
+            metadata={"changed_fields": changed_fields},
+        )
         db.commit()
         db.refresh(bridge)
 
@@ -321,6 +343,15 @@ def delete_bridge(
     bridge = get_owned_bridge(bridge_id, current_user, db)
     ensure_bridge_not_active(bridge, "delete")
 
+    add_audit_event(
+        db,
+        actor=current_user,
+        target_user_id=current_user.id,
+        bridge_id=bridge.id,
+        action="BRIDGE_DELETED",
+        message="Bridge deleted.",
+        metadata={"subdomain": bridge.subdomain, "status": bridge.status},
+    )
     db.delete(bridge)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -382,6 +413,15 @@ def validate_bridge(
             message=result.message,
             metadata=validation_metadata(bridge, result),
         )
+        add_audit_event(
+            db,
+            actor=current_user,
+            target_user_id=current_user.id,
+            bridge_id=bridge.id,
+            action="BRIDGE_VALIDATED",
+            message="Bridge TCP validation passed.",
+            metadata={"result": "OK"},
+        )
         db.commit()
         db.refresh(bridge)
         return bridge_to_response(bridge)
@@ -396,6 +436,15 @@ def validate_bridge(
         event_type="TCP_VALIDATION_FAILED",
         message=result.message,
         metadata=validation_metadata(bridge, result),
+    )
+    add_audit_event(
+        db,
+        actor=current_user,
+        target_user_id=current_user.id,
+        bridge_id=bridge.id,
+        action="BRIDGE_VALIDATED",
+        message="Bridge TCP validation failed.",
+        metadata={"result": "FAILED", "error_code": result.error_code},
     )
     db.commit()
 
@@ -447,6 +496,15 @@ def activate_bridge(
             event_type="CADDY_ACTIVATION_PASSED",
             message=result.message,
             metadata=activation_metadata(bridge, result),
+        )
+        add_audit_event(
+            db,
+            actor=current_user,
+            target_user_id=current_user.id,
+            bridge_id=bridge.id,
+            action="BRIDGE_ACTIVATED",
+            message="Bridge activated.",
+            metadata={"subdomain": bridge.subdomain},
         )
         db.commit()
         db.refresh(bridge)
@@ -511,6 +569,15 @@ def disable_bridge(
             event_type="CADDY_DISABLE_PASSED",
             message=result.message,
             metadata=activation_metadata(bridge, result),
+        )
+        add_audit_event(
+            db,
+            actor=current_user,
+            target_user_id=current_user.id,
+            bridge_id=bridge.id,
+            action="BRIDGE_DISABLED",
+            message="Bridge disabled.",
+            metadata={"subdomain": bridge.subdomain},
         )
         db.commit()
         db.refresh(bridge)
